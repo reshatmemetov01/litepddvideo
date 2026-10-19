@@ -93,7 +93,9 @@ async function startRender(ctx, jobId, quality, withVoice) {
 }
 
 async function download(ctx, fileId, dest) {
-  const f = await ctx.api.getFile(fileId);
+  const f = await ctx.api.getFile(fileId).catch((e) => {
+    throw new Error(/too big/i.test(e.message) ? 'Файл больше 20 МБ, Telegram не даёт боту его скачать. Отправьте запись как «Видео» (не как «Файл»): так Telegram её сожмёт.' : e.message);
+  });
   const res = await fetch(`https://api.telegram.org/file/bot${token}/${f.file_path}`);
   if (!res.ok) throw new Error(`Telegram не отдал файл (${res.status})`);
   fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
@@ -134,6 +136,11 @@ bot.on(['message:voice', 'message:audio'], (ctx) => {
   const f = ctx.message.voice ?? ctx.message.audio;
   return acceptVoice(ctx, f.file_id, ctx.message.voice ? '.ogg' : path.extname(f.file_name ?? '') || '.m4a');
 });
+// запись экрана с голосом: звук берётся из видео (картинка игнорируется)
+bot.on(['message:video', 'message:video_note'], (ctx) => {
+  const f = ctx.message.video ?? ctx.message.video_note;
+  return acceptVoice(ctx, f.file_id, path.extname(f.file_name ?? '') || '.mp4');
+});
 bot.on('message:document', async (ctx) => {
   const d = ctx.message.document, st = state.get(ctx.chat.id);
   if (d.file_name?.endsWith('.json')) {
@@ -141,8 +148,8 @@ bot.on('message:document', async (ctx) => {
     await download(ctx, d.file_id, tmp);
     return acceptScenario(ctx, fs.readFileSync(tmp, 'utf8'));
   }
-  if (d.mime_type?.startsWith('audio/') || /\.(m4a|mp3|wav|ogg|aac)$/i.test(d.file_name ?? '')) return acceptVoice(ctx, d.file_id, path.extname(d.file_name) || '.m4a');
-  return ctx.reply('Пришлите .json со сценарием или аудиозапись голоса.');
+  if (d.mime_type?.startsWith('audio/') || d.mime_type?.startsWith('video/') || /\.(m4a|mp3|wav|ogg|aac|mp4|mov|mkv|webm)$/i.test(d.file_name ?? '')) return acceptVoice(ctx, d.file_id, path.extname(d.file_name) || '.m4a');
+  return ctx.reply('Пришлите .json со сценарием, а для озвучки аудио или видеозапись экрана с голосом.');
 });
 bot.on('message:text', (ctx) => {
   const st = state.get(ctx.chat.id);

@@ -35,3 +35,9 @@ html, body { margin: 0; background: #000; }
 .cta { position: absolute; left: 5%; right: 5%; top: 38rem; text-align: center; background: rgba(14, 22, 48, .94); border: .3em solid #ffd400; border-radius: 1.6em; padding: 1.4em 1em; }
 .cta-t { font-weight: 800; font-size: 3.6rem; line-height: 1.15; }
 .cta-s { font-weight: 700; font-size: 2.6rem; margin-top: .5rem; color: #ffd400; }
+
+.card.img { background: none; box-shadow: none; padding: 0; top: 10.5rem; }
+.card .imgwrap { position: relative; border-radius: 1.6rem; overflow: hidden; box-shadow: 0 .8rem 3rem rgba(0,0,0,.35); background: #fff; }
+.card .imgwrap img { display: block; width: 100%; height: auto; }
+.card .hl { position: absolute; border: .45rem solid #2fdc55; background: rgba(47, 220, 85, .28); border-radius: 1.2rem; box-sizing: border-box; }
+.card .badge { margin: 1rem auto 0; width: fit-content; background: #2fdc55; color: #06240f; font-weight: 800; font-size: 3rem; padding: .35em .9em; border-radius: 99em; box-shadow: 0 .4rem 1.5rem rgba(0,0,0,.3); }

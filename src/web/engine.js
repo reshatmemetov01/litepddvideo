@@ -30,7 +30,7 @@ function box(w, h, d, color, x = 0, y = 0, z = 0) {
 }
 
 // ---------- мир ----------
-function buildGround(scene, roads) {
+function buildGround(scene, roads, hasCrosswalks = false) {
   const grass = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mat(0x6cc04a));
   grass.rotation.x = -Math.PI / 2;
   grass.receiveShadow = true;
@@ -63,7 +63,8 @@ function buildGround(scene, roads) {
   if (hasX && hasZ) {
     scene.add(box(W, 0.3, W, asphalt, 0, 0.15, 0));
     // стоп-линии
-    for (const [x, z, rot] of [[2, W / 2 + 0.6, 0], [-2, -W / 2 - 0.6, 0], [W / 2 + 0.6, -2, 1], [-W / 2 - 0.6, 2, 1]]) {
+    const so = hasCrosswalks ? 9.6 : W / 2 + 0.6;
+    for (const [x, z, rot] of [[2, so, 0], [-2, -so, 0], [so, -2, 1], [-so, 2, 1]]) {
       const l = box(4, 0.02, 0.4, 0xf4f4f4, x, 0.32, z);
       if (rot) l.rotation.y = Math.PI / 2, l.position.set(x, 0.32, z);
       scene.add(l);
@@ -71,10 +72,12 @@ function buildGround(scene, roads) {
   }
 }
 
-function addCrosswalk(scene, z) {
-  // зебра на дороге вдоль оси z: полосы параллельны движению, пешеход идёт вдоль x
+function addCrosswalk(scene, c) {
+  // число — зебра через дорогу вдоль z на этой координате z; объект {road, at}: через дорогу 'x' или 'z'
+  const { road, at } = typeof c === 'number' ? { road: 'z', at: c } : c;
   for (let i = -3; i <= 3; i++) {
-    scene.add(box(0.65, 0.03, 4, 0xf4f4f4, i * 1.15, 0.12, z));
+    if (road === 'z') scene.add(box(0.65, 0.03, 4, 0xf4f4f4, i * 1.15, 0.12, at));
+    else scene.add(box(4, 0.03, 0.65, 0xf4f4f4, at, 0.12, i * 1.15));
   }
 }
 
@@ -133,10 +136,8 @@ function buildScenery(scene, roads) {
         addBuilding(scene, cx, cz, 14, 14, 9 + rnd() * 9);
         addBuilding(scene, cx + sx * 20, cz, 14, 14, 8 + rnd() * 8);
         addBuilding(scene, cx, cz + sz * 20, 14, 14, 8 + rnd() * 8);
-        addTree(scene, sx * (W / 2 + 2.2), sz * (W / 2 + 9), 1);
-        addTree(scene, sx * (W / 2 + 9), sz * (W / 2 + 2.2), 1.1);
-        addTree(scene, sx * (W / 2 + 2.2), sz * (W / 2 + 22), 1);
-        addTree(scene, sx * (W / 2 + 22), sz * (W / 2 + 2.2), 1);
+        addTree(scene, sx * (W / 2 + 2.2), sz * (W / 2 + 26), 1);
+        addTree(scene, sx * (W / 2 + 26), sz * (W / 2 + 2.2), 1);
       }
     }
   } else if (hasZ) {
@@ -209,6 +210,30 @@ function makeSign(def) {
   g.add(face);
   g.position.set(def.pos[0], 0.25, def.pos[1]);
   g.rotation.y = ((def.rot ?? 0) * Math.PI) / 180;  // 0 = знак смотрит на +z (на зрителя снизу)
+  g.scale.setScalar(1.6);
+  return g;
+}
+
+// ---------- светофор ----------
+function makeTrafficLight(def) {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 4.2, 8), mat(0x555555));
+  pole.position.y = 2.1; pole.castShadow = true; g.add(pole);
+  g.add(box(0.6, 1.7, 0.5, 0x1d1f24, 0, 4.5, 0));
+  const lamps = { red: 0xff2a20, yellow: 0xffc400, green: 0x2cff5a };
+  Object.entries({ red: 5.05, yellow: 4.5, green: 3.95 }).forEach(([k, y]) => {
+    const lit = (def.state ?? 'red') === k;
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), new THREE.MeshBasicMaterial({ color: lit ? lamps[k] : 0x2a2a2a }));
+    lamp.position.set(0, y, 0.27);
+    g.add(lamp);
+    if (lit) {
+      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 10), new THREE.MeshBasicMaterial({ color: lamps[k], transparent: true, opacity: 0.3 }));
+      glow.position.copy(lamp.position); g.add(glow);
+    }
+  });
+  g.position.set(def.pos[0], 0.25, def.pos[1]);
+  g.rotation.y = ((def.rot ?? 0) * Math.PI) / 180;
+  g.scale.setScalar(1.3);
   return g;
 }
 
@@ -242,6 +267,15 @@ function makeVehicle(def) {
     [-1.4, 1.4].forEach((x) => [-0.85, 0.85].forEach((z) => wheel(x, z)));
     g.add(box(0.1, 0.25, 0.4, 0xfff2b0, 2.22, 1.0, 0.6));
     g.add(box(0.1, 0.25, 0.4, 0xfff2b0, 2.22, 1.0, -0.6));
+    // поворотники: вперёд +x, левый борт = -z
+    g.userData.blink = { left: [], right: [] };
+    for (const [side, z] of [['left', -0.9], ['right', 0.9]]) {
+      for (const x of [2.2, -2.2]) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.26, 0.34), new THREE.MeshBasicMaterial({ color: 0xff9a00 }));
+        b.position.set(x, 0.95, z); b.visible = false; g.add(b);
+        g.userData.blink[side].push(b);
+      }
+    }
   }
   return g;
 }
@@ -261,7 +295,7 @@ function makePedestrian(def) {
 }
 
 // ---------- траектории ----------
-function makePath(points) {
+function makePath(points, defaultHeading = 0) {
   const pts = points.map((p) => ({ t: p.t, x: p.x, z: p.z, ctrl: p.ctrl, ease: p.ease !== false }));
   const at = (t) => {
     if (t <= pts[0].t) return { x: pts[0].x, z: pts[0].z };
@@ -292,9 +326,12 @@ function makePath(points) {
       const h = Math.atan2(-dz, dx);
       heading = heading === null ? h : lerpAngle(heading, h, 0.12);
     }
-    table.push(heading ?? 0);
+    table.push(heading);
   }
-  if (heading === null) table.push(0);
+  // пока объект стоит до начала движения — смотрит туда, куда потом поедет (или заданный heading)
+  const first = table.find((h) => h !== null);
+  for (let i = 0; i < table.length && table[i] === null; i++) table[i] = first ?? defaultHeading;
+  if (!table.length) table.push(defaultHeading);
   const headingAt = (t) => table[clamp(Math.round((t - t0) / step), 0, table.length - 1)];
   const speedAt = (t) => {
     const p = at(t), q = at(t + 0.1);
@@ -327,9 +364,10 @@ export async function createEngine(canvas, overlay, scenario, size) {
   scene.add(sun);
 
   const roads = scenario.scene.roads ?? ['x', 'z'];
-  buildGround(scene, roads);
+  buildGround(scene, roads, (scenario.scene.crosswalks ?? []).length > 0);
   buildScenery(scene, roads);
-  (scenario.scene.crosswalks ?? []).forEach((z) => addCrosswalk(scene, z));
+  (scenario.scene.crosswalks ?? []).forEach((c) => addCrosswalk(scene, c));
+  (scenario.scene.lights ?? []).forEach((l) => scene.add(makeTrafficLight(l)));
   (scenario.scene.signs ?? []).forEach((s) => scene.add(makeSign(s)));
 
   // объекты
@@ -337,7 +375,7 @@ export async function createEngine(canvas, overlay, scenario, size) {
   for (const o of scenario.objects) {
     const mesh = o.type === 'pedestrian' ? makePedestrian(o) : makeVehicle(o);
     scene.add(mesh);
-    actors[o.id] = { def: o, mesh, path: makePath(o.path) };
+    actors[o.id] = { def: o, mesh, path: makePath(o.path, ((o.heading ?? 0) * Math.PI) / 180) };
   }
 
   // подсветка-кольцо
@@ -377,7 +415,18 @@ export async function createEngine(canvas, overlay, scenario, size) {
   const labels = (scenario.labels ?? []).map((l) => { const d = el('label ' + (l.style ?? '')); d.innerHTML = markup(l.text); return { l, d }; });
   const captions = (scenario.voiceover ?? []).filter((v) => !v.noCaption).map((v) => { const d = el('caption'); d.innerHTML = markup(v.text); return { v, d }; });
   let card = null;
-  if (scenario.card) {
+  if (scenario.card?.image) {
+    const c = scenario.card;
+    const d = el('card img');
+    const src = c.image.startsWith('data:') ? c.image : '/' + c.image;
+    const r = c.correctRect;
+    d.innerHTML = `<div class="imgwrap"><img src="${src}">` +
+      (r ? `<div class="hl" style="left:${r[0] * 100}%;top:${r[1] * 100}%;width:${r[2] * 100}%;height:${r[3] * 100}%"></div>` : '') +
+      `</div><div class="badge">✓ Правильный ответ: ${c.correct + 1}</div>`;
+    const imgEl = d.querySelector('img');
+    await imgEl.decode().catch(() => { throw new Error('Не удалось загрузить картинку вопроса'); });
+    card = { c, d, answers: [], hl: d.querySelector('.hl'), badge: d.querySelector('.badge') };
+  } else if (scenario.card) {
     const d = el('card');
     d.innerHTML = `<div class="card-h">Вопрос из билета</div>
       <div class="card-q">${scenario.card.question}</div>
@@ -401,6 +450,12 @@ export async function createEngine(canvas, overlay, scenario, size) {
       const p = a.path.at(t);
       a.mesh.position.set(p.x, 0.25, p.z);
       a.mesh.rotation.y = a.path.headingAt(t);
+      if (a.def.appear) a.mesh.visible = t >= a.def.path[0].t && t <= a.def.path.at(-1).t;
+      if (a.def.blinker && a.mesh.userData.blink) {
+        const bl = a.def.blinker;
+        const on = t >= bl.t0 && t <= bl.t1 && Math.floor(t * 2.6) % 2 === 0;
+        for (const side of ['left', 'right']) a.mesh.userData.blink[side].forEach((m) => (m.visible = on && side === bl.side));
+      }
       if (a.def.type === 'pedestrian') {
         const sp = a.path.speedAt(t);
         const k = Math.sin(t * 9) * 0.35 * clamp(sp, 0, 1);
@@ -462,6 +517,8 @@ export async function createEngine(canvas, overlay, scenario, size) {
       vis(card.d, on);
       card.d.style.transform = `translateY(${(1 - on) * -30}px)`;
       const rev = t >= card.c.reveal;
+      if (card.badge) card.badge.style.display = rev ? '' : 'none';
+      if (card.hl) card.hl.style.display = rev ? '' : 'none';
       card.answers.forEach((n, k) => {
         n.classList.toggle('ok', rev && k === card.c.correct);
         n.classList.toggle('dim', rev && k !== card.c.correct);

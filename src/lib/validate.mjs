@@ -2,6 +2,7 @@
 import { parseAnchor } from './timeline.mjs';
 
 const OBJECT_TYPES = ['car', 'bus', 'truck', 'pedestrian'];
+const LIGHT_STATES = ['red', 'yellow', 'green', 'off'];
 const SIGN_TYPES = ['main_road', 'yield', 'stop', 'ped_crossing'];
 const ROADS = [['x', 'z'], ['z'], ['x']];
 
@@ -27,6 +28,14 @@ export function validateScenario(s) {
     if (!Array.isArray(g.pos) || g.pos.length !== 2) err(`scene.signs[${i + 1}]: pos должен быть [x, z]`);
   });
 
+  (s.scene?.lights ?? []).forEach((l, i) => {
+    if (!LIGHT_STATES.includes(l.state)) err(`scene.lights[${i + 1}]: state должен быть ${LIGHT_STATES.join(', ')}`);
+    if (!Array.isArray(l.pos) || l.pos.length !== 2) err(`scene.lights[${i + 1}]: pos должен быть [x, z]`);
+  });
+  (s.scene?.crosswalks ?? []).forEach((c, i) => {
+    if (typeof c !== 'number' && !(c && ['x', 'z'].includes(c.road) && typeof c.at === 'number')) err(`scene.crosswalks[${i + 1}]: число или {road: "x"|"z", at: число}`);
+  });
+
   const ids = new Set();
   if (!Array.isArray(s.objects) || !s.objects.length) err('objects: нужен хотя бы один объект');
   (s.objects ?? []).forEach((o) => {
@@ -39,6 +48,7 @@ export function validateScenario(s) {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') err(`объект «${o.id}», точка ${i + 1}: нужны числа x и z`);
       checkTime(p.t, `объект «${o.id}», точка ${i + 1}`);
     });
+    if (o.blinker) { checkTime(o.blinker.t0, `объект «${o.id}», blinker.t0`); checkTime(o.blinker.t1, `объект «${o.id}», blinker.t1`); }
   });
 
   const needId = (id, where) => { if (typeof id === 'string' && !ids.has(id)) err(`${where}: объекта «${id}» нет`); };
@@ -54,10 +64,16 @@ export function validateScenario(s) {
   });
 
   if (s.card) {
-    const { answers, correct } = s.card;
-    if (!s.card.question) err('card.question: нет текста вопроса');
-    if (!Array.isArray(answers) || answers.length < 2) err('card.answers: нужно минимум 2 ответа');
-    else if (!Number.isInteger(correct) || correct < 0 || correct >= answers.length) err('card.correct: номер правильного ответа (с 0) вне диапазона');
+    const { answers, correct, image, correctRect } = s.card;
+    if (image) {
+      if (!/^data:image\//.test(image) && !/^[\w./-]+\.(png|jpe?g|webp)$/i.test(image)) err('card.image: нужен путь к картинке или data:image/…');
+      if (!Number.isInteger(correct) || correct < 0) err('card.correct: номер правильного ответа (с 0)');
+      if (correctRect && (!Array.isArray(correctRect) || correctRect.length !== 4)) err('card.correctRect: [x, y, ширина, высота] в долях картинки (0–1)');
+    } else {
+      if (!s.card.question) err('card.question: нет текста вопроса');
+      if (!Array.isArray(answers) || answers.length < 2) err('card.answers: нужно минимум 2 ответа');
+      else if (!Number.isInteger(correct) || correct < 0 || correct >= answers.length) err('card.correct: номер правильного ответа (с 0) вне диапазона');
+    }
     (s.card.windows ?? []).forEach((w, i) => w.forEach((x, k) => checkTime(x, `card.windows[${i + 1}][${k + 1}]`)));
     checkTime(s.card.reveal, 'card.reveal');
   }

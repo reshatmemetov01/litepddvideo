@@ -24,7 +24,7 @@ export function parseScenarioText(text) {
 export function describeScenario(s) {
   const { total } = layoutPhrases(s.voiceover.map((v) => estimateDuration(v.text)));
   const phrases = s.voiceover.map((v, i) => `<b>${i + 1}.</b> ${esc(strip(v.text))}`).join('\n');
-  const answer = s.card ? `\nОтвет: <b>${s.card.correct + 1}. ${esc(s.card.answers[s.card.correct])}</b>` : '';
+  const answer = s.card ? `\nОтвет: <b>${s.card.correct + 1}${s.card.answers ? '. ' + esc(s.card.answers[s.card.correct]) : ''}</b>` : '';
   return `🎬 <b>${esc(s.title ?? 'Сценарий')}</b>${answer}\n\n` +
     `Фразы для озвучки (${s.voiceover.length}):\n${phrases}\n\n` +
     `Примерная длина ролика: ~${Math.round(total)} с`;
