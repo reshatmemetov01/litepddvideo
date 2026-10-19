@@ -38,7 +38,7 @@ const run = (cmd, args) => new Promise((resolve, reject) => {
  * @param {string} o.out        путь к итоговому mp4
  * @param {number[]} [o.onlyFrames] только эти моменты (сек) в PNG рядом с out
  */
-export async function renderScenario({ scenario, durations, audio, quality = 'hd', out, workers, fps = 30, onProgress, onlyFrames, limitFrames }) {
+export async function renderScenario({ scenario, durations, audio, quality = 'hd', out, workers, fps = 30, onProgress, onlyFrames, limitFrames, timeoutMs = 45 * 60 * 1000 }) {
   const errors = validateScenario(scenario);
   if (errors.length) throw Object.assign(new Error('Сценарий не прошёл проверку:\n• ' + errors.join('\n• ')), { errors });
 
@@ -63,6 +63,9 @@ export async function renderScenario({ scenario, durations, audio, quality = 'hd
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--disable-dev-shm-usage'],
   });
   const silent = out.replace(/\.mp4$/, '') + '.silent.mp4';
+  // защита от зависания: по истечении времени закрываем браузер, рендер падает с ошибкой
+  const watchdog = setTimeout(() => browser.close().catch(() => {}), timeoutMs);
+  let ffRef = null;
   try {
     const pages = [];
     for (let i = 0; i < (onlyFrames ? 1 : n); i++) {
@@ -85,6 +88,7 @@ export async function renderScenario({ scenario, durations, audio, quality = 'hd
     const total = limitFrames ?? Math.round(resolved.duration * fps);
     const ff = spawn('ffmpeg', ['-y', '-v', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-i', '-',
       '-c:v', 'libx264', '-preset', quality === 'draft' ? 'veryfast' : 'medium', '-crf', quality === 'fhd' ? '18' : '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', silent], { stdio: ['pipe', 'inherit', 'inherit'] });
+    ffRef = ff;
     const ffDone = new Promise((r) => ff.on('close', r));
 
     // кадры снимаются параллельно вкладками, пишутся в ffmpeg строго по порядку
@@ -121,8 +125,13 @@ export async function renderScenario({ scenario, durations, audio, quality = 'hd
       fs.renameSync(silent, out);
     }
     return { out, duration: resolved.duration, seconds: (Date.now() - t0) / 1000 };
+  } catch (e) {
+    ffRef?.kill('SIGKILL');
+    fs.rmSync(silent, { force: true });
+    throw e;
   } finally {
-    await browser.close();
+    clearTimeout(watchdog);
+    await browser.close().catch(() => {});
     server.close();
     fs.rmSync(path.join(root, scenarioRel), { force: true });
   }

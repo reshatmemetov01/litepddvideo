@@ -6,6 +6,9 @@ import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob } from './store.mjs';
 import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, enqueueRender, queueLength, esc } from './pipeline.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
+import { ensureSpace, startCleanupTimer, freeGB, dirSizeMB, MIN_FREE_GB, RETENTION_DAYS } from './cleanup.mjs';
+import { root } from '../lib/render.mjs';
+import os from 'node:os';
 
 const token = process.env.BOT_TOKEN;
 if (!token) { console.error('Задайте BOT_TOKEN (токен от @BotFather)'); process.exit(1); }
@@ -28,6 +31,10 @@ bot.command('start', (ctx) => ctx.reply('Привет! Я собираю рол�
 bot.hears('🎬 Создать видео', (ctx) => {
   state.set(ctx.chat.id, { mode: 'scenario' });
   return ctx.reply('Пришлите сценарий: текстом сообщения или файлом .json.');
+});
+bot.command('disk', (ctx) => {
+  const free = freeGB(), data = dirSizeMB(path.join(root, 'data'));
+  return ctx.reply(`💾 Свободно на диске: ${free.toFixed(1)} ГБ\n📁 Данные бота: ${data.toFixed(0)} МБ\n🧠 Память: свободно ${(os.freemem() / 2 ** 30).toFixed(1)} из ${(os.totalmem() / 2 ** 30).toFixed(1)} ГБ\n🗑 Ролики хранятся ${RETENTION_DAYS} дн., потом удаляются сами`);
 });
 bot.hears('📋 Мои ролики', async (ctx) => {
   const jobs = recentJobs(ctx.chat.id);
@@ -68,10 +75,12 @@ async function startRender(ctx, jobId, quality, withVoice) {
   const job = getJob(jobId);
   if (!job) return ctx.reply('Не нашёл этот ролик.');
   if (withVoice && !job.voice) return ctx.reply('Сначала запишите озвучку.');
+  const free = ensureSpace();
+  if (free < 1) return ctx.reply(`⚠️ На сервере почти нет места (свободно ${free.toFixed(1)} ГБ). Освободите диск и повторите.`);
   const ahead = queueLength();
   let progressMsg = await ctx.reply(ahead ? `⏳ В очереди: перед вами ${ahead}.` : '⚙️ Начинаю рендер…');
   let lastEdit = 0;
-  enqueueRender(jobId, {
+  try { enqueueRender(jobId, {
     quality, withVoice,
     onStart: () => ctx.api.editMessageText(ctx.chat.id, progressMsg.message_id, '⚙️ Рендерю видео…').catch(() => {}),
     onProgress: ({ frame, total, seconds }) => {
@@ -89,7 +98,7 @@ async function startRender(ctx, jobId, quality, withVoice) {
       });
     },
     onError: (e) => ctx.api.editMessageText(ctx.chat.id, progressMsg.message_id, `⚠️ Рендер не удался: ${e.message.slice(0, 600)}`).catch(() => {}),
-  });
+  }); } catch (e) { await ctx.api.editMessageText(ctx.chat.id, progressMsg.message_id, `⚠️ ${e.message}`).catch(() => {}); }
 }
 
 async function download(ctx, fileId, dest) {
@@ -158,6 +167,7 @@ bot.on('message:text', (ctx) => {
 });
 
 bot.catch((e) => console.error('[bot]', e.error?.message ?? e));
+startCleanupTimer();
 bot.start({ onStart: (me) => console.log(`Бот @${me.username} запущен, разрешено ID: ${[...allowed].join(', ')}`) }).catch((e) => {
   console.error(e.error_code === 401 ? 'Неверный BOT_TOKEN: возьмите новый у @BotFather' : `Не удалось запустить бота: ${e.message}`);
   process.exit(1);

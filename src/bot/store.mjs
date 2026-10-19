@@ -28,3 +28,10 @@ export const getJob = (id) => jobs[id];
 export const readScenario = (id) => JSON.parse(fs.readFileSync(path.join(jobDir(id), 'scenario.json'), 'utf8'));
 export function updateJob(id, patch) { Object.assign(jobs[id], patch); save(); return jobs[id]; }
 export const recentJobs = (chatId, n = 8) => Object.values(jobs).filter((j) => j.chatId === chatId).sort((a, b) => b.createdAt - a.createdAt).slice(0, n);
+
+export const allJobs = () => Object.values(jobs);
+export function removeJob(id) {
+  delete jobs[id];
+  fs.rmSync(path.join(dataDir, 'jobs', id), { recursive: true, force: true });
+  save();
+}

@@ -38,7 +38,10 @@ export const VOICE_INSTRUCTION =
 export async function prepareVoice(jobId, rawPath) {
   const s = readScenario(jobId);
   const dir = path.join(jobDir(jobId), 'voice');
-  const r = await processRecording(rawPath, s.voiceover.length, dir);
+  let r;
+  try { r = await processRecording(rawPath, s.voiceover.length, dir); }
+  finally { fs.rmSync(rawPath, { force: true }); }   // сырая запись больше не нужна
+  fs.rmSync(r.cleaned, { force: true });             // промежуточный файл тоже
   // ogg/opus — чтобы бот мог прислать очищенный голос на проверку
   const preview = path.join(dir, 'voice.ogg');
   await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-v', 'error', '-i', r.track, '-c:a', 'libopus', '-b:a', '48k', preview]).on('close', (c) => (c ? rej(new Error('ffmpeg opus')) : res())));
@@ -51,7 +54,10 @@ const queue = [];
 let busy = false;
 export const queueLength = () => queue.length + (busy ? 1 : 0);
 
+const MAX_QUEUE = +process.env.MAX_QUEUE || 5;
+
 export function enqueueRender(jobId, { quality, withVoice, onStart, onProgress, onDone, onError }) {
+  if (queueLength() >= MAX_QUEUE) throw new Error(`Очередь заполнена (${MAX_QUEUE}), подождите, пока освободится`);
   updateJob(jobId, { status: 'queued', quality });
   queue.push({ jobId, quality, withVoice, onStart, onProgress, onDone, onError });
   pump();
