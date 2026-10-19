@@ -3,3 +3,4 @@ out/
 data/
 .env
 *.silent.mp4
+assets/rnnoise.rnnn
