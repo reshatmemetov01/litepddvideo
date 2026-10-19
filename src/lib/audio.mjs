@@ -29,20 +29,29 @@ export async function duration(file) {
   return parseFloat(out);
 }
 
-/** Шумодав (RNNoise, запасной вариант — FFT), срез низов, «тёплый» тембр, мягкая компрессия. */
-export async function cleanVoice(input, output) {
-  const denoise = fs.existsSync(RNNOISE_MODEL)
-    ? `arnndn=m=${RNNOISE_MODEL}:mix=0.95,afftdn=nr=6:nf=-45`
-    : 'afftdn=nr=18:nf=-35:tn=1';
-  const chain = [
+/**
+ * Очистка голоса. Режимы (VOICE_CLEAN в .env):
+ *  off   — только срез инфранизов (оригинальный тембр без изменений)
+ *  light — срез низов + очень мягкое шумоподавление (по умолчанию)
+ *  full  — шумодав RNNoise, коррекция тембра, компрессия (для шумных записей)
+ */
+export const CLEAN_MODES = {
+  off: 'highpass=f=60',
+  light: 'highpass=f=70,afftdn=nr=4:nf=-55',
+  full: [
     'highpass=f=85',
-    denoise,
+    fs.existsSync(RNNOISE_MODEL) ? `arnndn=m=${RNNOISE_MODEL}:mix=0.95,afftdn=nr=6:nf=-45` : 'afftdn=nr=18:nf=-35:tn=1',
     'lowpass=f=12000',
-    'equalizer=f=220:t=q:w=1.0:g=-2',      // меньше «бубнения» от плохого микрофона
-    'equalizer=f=3200:t=q:w=1.0:g=2.5',    // чёткость дикции
-    'equalizer=f=7500:t=q:w=1.5:g=-2',     // приглушаем шипящие
+    'equalizer=f=220:t=q:w=1.0:g=-2',
+    'equalizer=f=3200:t=q:w=1.0:g=2.5',
+    'equalizer=f=7500:t=q:w=1.5:g=-2',
     'acompressor=threshold=-21dB:ratio=3:attack=6:release=90:makeup=4',
-  ].join(',');
+  ].join(','),
+};
+
+export async function cleanVoice(input, output, mode = process.env.VOICE_CLEAN ?? 'light') {
+  const chain = CLEAN_MODES[mode];
+  if (!chain) throw new Error(`VOICE_CLEAN: неизвестный режим «${mode}» (off, light, full)`);
   await run('ffmpeg', ['-y', '-v', 'error', '-i', input, '-vn', '-ac', '1', '-ar', '44100', '-af', chain, output]);
 }
 
