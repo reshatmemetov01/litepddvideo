@@ -31,8 +31,8 @@ export async function duration(file) {
 
 /**
  * Очистка голоса. Режимы (VOICE_CLEAN в .env):
- *  off   — только срез инфранизов (оригинальный тембр без изменений)
- *  light — срез низов + очень мягкое шумоподавление (по умолчанию)
+ *  off   — только срез инфранизов, тембр не меняется (по умолчанию)
+ *  light — срез низов + очень мягкое шумоподавление
  *  full  — шумодав RNNoise, коррекция тембра, компрессия (для шумных записей)
  */
 export const CLEAN_MODES = {
@@ -49,7 +49,7 @@ export const CLEAN_MODES = {
   ].join(','),
 };
 
-export async function cleanVoice(input, output, mode = process.env.VOICE_CLEAN ?? 'light') {
+export async function cleanVoice(input, output, mode = process.env.VOICE_CLEAN ?? 'off') {
   const chain = CLEAN_MODES[mode];
   if (!chain) throw new Error(`VOICE_CLEAN: неизвестный режим «${mode}» (off, light, full)`);
   await run('ffmpeg', ['-y', '-v', 'error', '-i', input, '-vn', '-ac', '1', '-ar', '44100', '-af', chain, output]);
