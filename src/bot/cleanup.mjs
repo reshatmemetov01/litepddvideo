@@ -45,6 +45,9 @@ export function cleanup({ maxAgeDays = RETENTION_DAYS } = {}) {
       if (!known.has(name) && olderThan(path.join(jobsRoot, name), DAY)) { fs.rmSync(path.join(jobsRoot, name), { recursive: true, force: true }); removed++; }
     }
   }
+  // кэш озвучки: фразы старше 30 дней не нужны (текст обычно меняется)
+  const cache = path.join(dataDir, 'tts-cache');
+  if (fs.existsSync(cache)) for (const name of fs.readdirSync(cache)) if (olderThan(path.join(cache, name), 30 * DAY)) { fs.rmSync(path.join(cache, name), { force: true }); removed++; }
   // временные файлы рендера и профили Chromium, оставшиеся после сбоев
   for (const dir of [path.join(dataDir, 'tmp'), os.tmpdir()]) {
     if (!fs.existsSync(dir)) continue;

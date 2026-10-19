@@ -4,7 +4,8 @@ import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob } from './store.mjs';
-import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, enqueueRender, queueLength, esc } from './pipeline.mjs';
+import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, enqueueRender, queueLength, esc } from './pipeline.mjs';
+import { ttsConfigured, getUsage } from '../lib/tts.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
 import { layoutPhrases } from '../lib/timeline.mjs';
 import { ensureSpace, startCleanupTimer, freeGB, dirSizeMB, MIN_FREE_GB, RETENTION_DAYS } from './cleanup.mjs';
@@ -55,6 +56,7 @@ async function showJob(ctx, job) {
     await ctx.replyWithVideo(new InputFile(job.video), { caption: job.title, supports_streaming: true });
     kb.text('🎙 Перезаписать озвучку', `voice:${job.id}`).row().text('🖥 Full HD (1080p)', `render:${job.id}:fhd`);
   } else {
+    if (ttsConfigured()) kb.text('🤖 Озвучить моим голосом', `tts:${job.id}`).row();
     kb.text('🎙 Записать озвучку', `voice:${job.id}`).row().text('🧪 Черновик без голоса', `draft:${job.id}`);
     if (job.status === 'failed' || job.status === 'interrupted') kb.row().text('🔁 Повторить', `render:${job.id}:${QUALITY}`);
   }
@@ -67,6 +69,28 @@ bot.callbackQuery(/^voice:(.+)$/, async (ctx) => {
   state.set(ctx.chat.id, { mode: 'voice', jobId: ctx.match[1] });
   await ctx.reply(VOICE_INSTRUCTION, HTML);
 });
+async function runTts(ctx, jobId, fresh) {
+  const job = getJob(jobId);
+  if (!job) return ctx.reply('Не нашёл этот ролик.');
+  if (['queued', 'rendering'].includes(job.status)) return ctx.reply('Этот ролик уже в очереди или рендерится.');
+  const msg = await ctx.reply('🤖 Озвучиваю вашим голосом…');
+  try {
+    const r = await prepareTts(jobId, { fresh });
+    const { total } = layoutPhrases(r.durations);
+    const spent = r.chars ? `списано ${r.chars} симв.` : 'взято из кэша, символы не тратились';
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Озвучено: ${r.durations.length} фраз, ролик ~${Math.round(total)} с (${spent}${r.fromCache && r.chars ? `, ${r.fromCache} фраз из кэша` : ''}).`);
+    const kb = new InlineKeyboard().text('✅ Всё хорошо, делать видео', `ok:${jobId}`).row()
+      .text('🔁 Другой дубль (спишет символы)', `ttsnew:${jobId}`).row().text('🎙 Записать самому', `voice:${jobId}`);
+    await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так прозвучит озвучка в ролике. Всё устраивает?', reply_markup: kb });
+    state.set(ctx.chat.id, { mode: 'voice', jobId });
+    const usage = await getUsage();
+    if (usage) await ctx.reply(`ℹ️ ElevenLabs: использовано ${usage.used} из ${usage.limit} символов в этом периоде.`);
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `⚠️ ${e.message.slice(0, 500)}`);
+  }
+}
+bot.callbackQuery(/^tts:(.+)$/, async (ctx) => { await ctx.answerCallbackQuery(); await runTts(ctx, ctx.match[1], false); });
+bot.callbackQuery(/^ttsnew:(.+)$/, async (ctx) => { await ctx.answerCallbackQuery(); await runTts(ctx, ctx.match[1], true); });
 bot.callbackQuery(/^ok:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   const job = getJob(ctx.match[1]);
@@ -128,7 +152,9 @@ async function acceptScenario(ctx, text) {
   if (errors) return ctx.reply('⚠️ Со сценарием проблема:\n• ' + errors.slice(0, 8).join('\n• ') + '\n\nИсправьте и пришлите ещё раз.');
   const job = createJob(scenario, ctx.chat.id);
   state.set(ctx.chat.id, { mode: 'voice', jobId: job.id });
-  const kb = new InlineKeyboard().text('🧪 Черновик без голоса', `draft:${job.id}`).text('❌ Отмена', 'cancel');
+  const kb = new InlineKeyboard();
+  if (ttsConfigured()) kb.text(`🤖 Озвучить моим голосом (${ttsChars(job.id)} симв.)`, `tts:${job.id}`).row();
+  kb.text('🧪 Черновик без голоса', `draft:${job.id}`).text('❌ Отмена', 'cancel');
   await ctx.reply(describeScenario(scenario), HTML);
   await ctx.reply(VOICE_INSTRUCTION, { ...HTML, reply_markup: kb });
 }
@@ -145,6 +171,7 @@ async function acceptVoice(ctx, fileId, ext) {
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос обработан: ${r.durations.length} фраз, ролик получится ~${Math.round(total)} с.`);
     // рендер НЕ запускаем: сначала вы слушаете очищенную запись и подтверждаете или перезаписываете
     const kb = new InlineKeyboard().text('✅ Всё хорошо, делать видео', `ok:${st.jobId}`).row().text('🎙 Перезаписать', `voice:${st.jobId}`);
+    if (ttsConfigured()) kb.row().text('🤖 Озвучить моим голосом', `tts:${st.jobId}`);
     await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так прозвучит озвучка в ролике. Всё устраивает? Можно и просто прислать новую запись: она заменит эту.', reply_markup: kb });
     state.set(ctx.chat.id, { mode: 'voice', jobId: st.jobId });
   } catch (e) {

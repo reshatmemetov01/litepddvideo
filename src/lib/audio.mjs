@@ -111,6 +111,31 @@ export async function assembleTrack(wav, segs, output) {
   return bounds.map(([a, b]) => b - a);
 }
 
+/** Собирает дорожку из отдельных файлов-фраз (озвучка по тексту): обрезает тишину, ставит паузы LEAD_IN/GAP, выравнивает громкость. */
+export async function assembleFromFiles(files, output, workDir) {
+  fs.mkdirSync(workDir, { recursive: true });
+  const trimmed = [];
+  for (let i = 0; i < files.length; i++) {
+    const out = path.join(workDir, `phrase${i}.wav`);
+    await run('ffmpeg', ['-y', '-v', 'error', '-i', files[i], '-ac', '1', '-ar', '44100', '-af',
+      'silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.04,areverse,silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.12,areverse', out]);
+    trimmed.push(out);
+  }
+  const durations = [];
+  for (const f of trimmed) durations.push(await duration(f));
+  const filters = [], labels = [];
+  const sil = (name, d) => { filters.push(`anullsrc=r=44100:cl=mono,atrim=0:${d.toFixed(3)},asetpts=PTS-STARTPTS[${name}]`); labels.push(`[${name}]`); };
+  sil('lead', LEAD_IN);
+  trimmed.forEach((f, i) => {
+    filters.push(`[${i}:a]aresample=44100,aformat=channel_layouts=mono[s${i}]`);
+    labels.push(`[s${i}]`);
+    if (i < trimmed.length - 1) sil(`g${i}`, GAP);
+  });
+  filters.push(`${labels.join('')}concat=n=${labels.length}:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=9,aresample=44100[out]`);
+  await run('ffmpeg', ['-y', '-v', 'error', ...trimmed.flatMap((f) => ['-i', f]), '-filter_complex', filters.join(';'), '-map', '[out]', '-ac', '1', output]);
+  return durations;
+}
+
 /** Полный цикл: запись → чистый трек + длительности фраз. */
 export async function processRecording(input, expectedPhrases, workDir) {
   fs.mkdirSync(workDir, { recursive: true });

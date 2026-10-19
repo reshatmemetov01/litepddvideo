@@ -4,9 +4,10 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { validateScenario } from '../lib/validate.mjs';
 import { renderScenario } from '../lib/render.mjs';
-import { processRecording } from '../lib/audio.mjs';
+import { processRecording, assembleFromFiles } from '../lib/audio.mjs';
+import { synthesizePhrases, countChars } from '../lib/tts.mjs';
 import { estimateDuration, layoutPhrases } from '../lib/timeline.mjs';
-import { jobDir, readScenario, updateJob, getJob } from './store.mjs';
+import { jobDir, readScenario, updateJob, getJob, dataDir } from './store.mjs';
 
 const strip = (t) => t.replace(/\[\/?[gry]\]/g, '');
 export const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -42,12 +43,32 @@ export async function prepareVoice(jobId, rawPath) {
   try { r = await processRecording(rawPath, s.voiceover.length, dir); }
   finally { fs.rmSync(rawPath, { force: true }); }   // сырая запись больше не нужна
   fs.rmSync(r.cleaned, { force: true });             // промежуточный файл тоже
-  // ogg/opus — чтобы бот мог прислать очищенный голос на проверку
-  const preview = path.join(dir, 'voice.ogg');
-  await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-v', 'error', '-i', r.track, '-c:a', 'libopus', '-b:a', '48k', preview]).on('close', (c) => (c ? rej(new Error('ffmpeg opus')) : res())));
-  updateJob(jobId, { status: 'voice_ready', voice: { track: r.track, durations: r.durations } });
+  const preview = await makePreview(r.track, dir);
+  updateJob(jobId, { status: 'voice_ready', voice: { track: r.track, durations: r.durations, source: 'manual' } });
   return { ...r, preview };
 }
+
+// ogg/opus нужен, чтобы бот мог прислать озвучку на проверку как голосовое
+async function makePreview(track, dir) {
+  const preview = path.join(dir, 'voice.ogg');
+  await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-v', 'error', '-i', track, '-c:a', 'libopus', '-b:a', '48k', preview]).on('close', (c) => (c ? rej(new Error('ffmpeg opus')) : res())));
+  return preview;
+}
+
+/** Озвучка текста сценария клонированным голосом. fresh: новый дубль без кэша (тратит символы заново). */
+export async function prepareTts(jobId, { fresh = false } = {}) {
+  const s = readScenario(jobId);
+  const dir = path.join(jobDir(jobId), 'voice');
+  const r = await synthesizePhrases(s.voiceover.map((v) => v.text), { dataDir, fresh });
+  const track = path.join(dir, 'voice.wav');
+  const durations = await assembleFromFiles(r.files, track, dir);
+  for (let i = 0; i < r.files.length; i++) fs.rmSync(path.join(dir, `phrase${i}.wav`), { force: true });
+  const preview = await makePreview(track, dir);
+  updateJob(jobId, { status: 'voice_ready', voice: { track, durations, source: 'tts' } });
+  return { track, durations, preview, chars: r.chars, fromCache: r.fromCache };
+}
+
+export const ttsChars = (jobId) => countChars(readScenario(jobId).voiceover.map((v) => v.text), dataDir);
 
 // ---- очередь: рендер по одному ролику, чтобы хватало 4 ГБ памяти ----
 const queue = [];
