@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { root } from '../lib/render.mjs';
-import { allJobs, removeJob } from './store.mjs';
+import { allJobs, removeJob, dataDir } from './store.mjs';
 
-const dataDir = path.join(root, 'data');
 const DAY = 24 * 3600 * 1000;
 export const RETENTION_DAYS = +process.env.RETENTION_DAYS || 7;
 export const MIN_FREE_GB = +process.env.MIN_FREE_GB || 3;

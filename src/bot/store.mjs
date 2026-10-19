@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { root } from '../lib/render.mjs';
 
-const dataDir = path.join(root, 'data');
+export const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(root, 'data');
 const file = path.join(dataDir, 'jobs.json');
 fs.mkdirSync(path.join(dataDir, 'jobs'), { recursive: true });
 

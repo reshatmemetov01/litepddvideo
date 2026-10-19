@@ -6,6 +6,7 @@ import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob } from './store.mjs';
 import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, enqueueRender, queueLength, esc } from './pipeline.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
+import { layoutPhrases } from '../lib/timeline.mjs';
 import { ensureSpace, startCleanupTimer, freeGB, dirSizeMB, MIN_FREE_GB, RETENTION_DAYS } from './cleanup.mjs';
 import { root } from '../lib/render.mjs';
 import os from 'node:os';
@@ -16,7 +17,8 @@ const allowed = new Set((process.env.ALLOWED_IDS ?? '').split(',').map((s) => s.
 if (!allowed.size) { console.error('Задайте ALLOWED_IDS — ваш Telegram ID (узнать: @userinfobot)'); process.exit(1); }
 const QUALITY = process.env.RENDER_QUALITY ?? 'hd';
 
-const bot = new Bot(token);
+const API_ROOT = process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org';   // свой адрес нужен только для тестов
+const bot = new Bot(token, { client: { apiRoot: API_ROOT } });
 const state = new Map();   // chatId → { mode: 'scenario' | 'voice', jobId }
 
 const menu = new Keyboard().text('🎬 Создать видео').text('📋 Мои ролики').resized();
@@ -39,7 +41,7 @@ bot.command('disk', (ctx) => {
 bot.hears('📋 Мои ролики', async (ctx) => {
   const jobs = recentJobs(ctx.chat.id);
   if (!jobs.length) return ctx.reply('Пока ничего нет.');
-  const label = { new: '🆕 ждёт голос', queued: '⏳ в очереди', rendering: '⚙️ рендерится', done: '✅ готов', failed: '⚠️ ошибка', interrupted: '⚠️ прервано' };
+  const label = { new: '🆕 ждёт голос', voice_ready: '🎧 ждёт подтверждения', queued: '⏳ в очереди', rendering: '⚙️ рендерится', done: '✅ готов', failed: '⚠️ ошибка', interrupted: '⚠️ прервано' };
   const kb = new InlineKeyboard();
   jobs.forEach((j) => kb.text(`${label[j.status] ?? j.status} · ${j.title.slice(0, 28)}`, `open:${j.id}`).row());
   return ctx.reply('Последние ролики:', { reply_markup: kb });
@@ -47,7 +49,9 @@ bot.hears('📋 Мои ролики', async (ctx) => {
 
 async function showJob(ctx, job) {
   const kb = new InlineKeyboard();
-  if (job.status === 'done' && job.video && fs.existsSync(job.video)) {
+  if (job.status === 'voice_ready' && job.voice) {
+    kb.text('✅ Всё хорошо, делать видео', `ok:${job.id}`).row().text('🎙 Перезаписать', `voice:${job.id}`);
+  } else if (job.status === 'done' && job.video && fs.existsSync(job.video)) {
     await ctx.replyWithVideo(new InputFile(job.video), { caption: job.title, supports_streaming: true });
     kb.text('🎙 Перезаписать озвучку', `voice:${job.id}`).row().text('🖥 Full HD (1080p)', `render:${job.id}:fhd`);
   } else {
@@ -63,6 +67,14 @@ bot.callbackQuery(/^voice:(.+)$/, async (ctx) => {
   state.set(ctx.chat.id, { mode: 'voice', jobId: ctx.match[1] });
   await ctx.reply(VOICE_INSTRUCTION, HTML);
 });
+bot.callbackQuery(/^ok:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const job = getJob(ctx.match[1]);
+  if (!job?.voice) return ctx.reply('Сначала запишите озвучку.');
+  await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});   // убираем кнопки, чтобы не нажать дважды
+  state.delete(ctx.chat.id);
+  await startRender(ctx, job.id, QUALITY, true);
+});
 bot.callbackQuery(/^draft:(.+)$/, async (ctx) => { await ctx.answerCallbackQuery(); await startRender(ctx, ctx.match[1], 'draft', false); });
 bot.callbackQuery(/^render:(.+):(hd|fhd)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
@@ -74,6 +86,7 @@ bot.callbackQuery('cancel', async (ctx) => { await ctx.answerCallbackQuery(); st
 async function startRender(ctx, jobId, quality, withVoice) {
   const job = getJob(jobId);
   if (!job) return ctx.reply('Не нашёл этот ролик.');
+  if (['queued', 'rendering'].includes(job.status)) return ctx.reply('Этот ролик уже в очереди или рендерится.');
   if (withVoice && !job.voice) return ctx.reply('Сначала запишите озвучку.');
   const free = ensureSpace();
   if (free < 1) return ctx.reply(`⚠️ На сервере почти нет места (свободно ${free.toFixed(1)} ГБ). Освободите диск и повторите.`);
@@ -105,7 +118,7 @@ async function download(ctx, fileId, dest) {
   const f = await ctx.api.getFile(fileId).catch((e) => {
     throw new Error(/too big/i.test(e.message) ? 'Файл больше 20 МБ, Telegram не даёт боту его скачать. Отправьте запись как «Видео» (не как «Файл»): так Telegram её сожмёт.' : e.message);
   });
-  const res = await fetch(`https://api.telegram.org/file/bot${token}/${f.file_path}`);
+  const res = await fetch(`${API_ROOT}/file/bot${token}/${f.file_path}`);
   if (!res.ok) throw new Error(`Telegram не отдал файл (${res.status})`);
   fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
 }
@@ -128,11 +141,12 @@ async function acceptVoice(ctx, fileId, ext) {
     const raw = path.join(jobDir(st.jobId), `raw${ext}`);
     await download(ctx, fileId, raw);
     const r = await prepareVoice(st.jobId, raw);
-    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос принят: ${r.durations.length} фраз.`);
-    // очищенный голос присылаем отдельно: можно сразу проверить звук до рендера
-    await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так звучит очищенная запись' }).catch(() => {});
-    await startRender(ctx, st.jobId, QUALITY, true);
-    state.delete(ctx.chat.id);
+    const { total } = layoutPhrases(r.durations);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос обработан: ${r.durations.length} фраз, ролик получится ~${Math.round(total)} с.`);
+    // рендер НЕ запускаем: сначала вы слушаете очищенную запись и подтверждаете или перезаписываете
+    const kb = new InlineKeyboard().text('✅ Всё хорошо, делать видео', `ok:${st.jobId}`).row().text('🎙 Перезаписать', `voice:${st.jobId}`);
+    await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так прозвучит озвучка в ролике. Всё устраивает? Можно и просто прислать новую запись: она заменит эту.', reply_markup: kb });
+    state.set(ctx.chat.id, { mode: 'voice', jobId: st.jobId });
   } catch (e) {
     const text = e instanceof AudioSplitError
       ? `⚠️ ${e.message}. Читайте фразы по порядку, между ними — пауза 1–2 секунды молча. Запишите ещё раз.`

@@ -32,7 +32,7 @@ export function describeScenario(s) {
 
 export const VOICE_INSTRUCTION =
   '🎙 Запишите голосовое сообщение: прочитайте фразы <b>по порядку</b>, между фразами делайте паузу <b>1–2 секунды</b> (молча). ' +
-  'Если оговорились — просто перепишите запись целиком. Шум и эхо я уберу.';
+  'Если оговорились — просто перепишите запись целиком. Шум и эхо я уберу, потом пришлю очищенный голос, и вы подтвердите его или запишете заново.';
 
 /** Запись голоса → очищенная дорожка и длительности фраз. */
 export async function prepareVoice(jobId, rawPath) {
@@ -45,7 +45,7 @@ export async function prepareVoice(jobId, rawPath) {
   // ogg/opus — чтобы бот мог прислать очищенный голос на проверку
   const preview = path.join(dir, 'voice.ogg');
   await new Promise((res, rej) => spawn('ffmpeg', ['-y', '-v', 'error', '-i', r.track, '-c:a', 'libopus', '-b:a', '48k', preview]).on('close', (c) => (c ? rej(new Error('ffmpeg opus')) : res())));
-  updateJob(jobId, { voice: { track: r.track, durations: r.durations } });
+  updateJob(jobId, { status: 'voice_ready', voice: { track: r.track, durations: r.durations } });
   return { ...r, preview };
 }
 

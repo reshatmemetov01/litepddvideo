@@ -46,7 +46,7 @@ export async function renderScenario({ scenario, durations, audio, quality = 'hd
   const resolved = resolveScenario(scenario, dur);
   const [W, H] = SIZES[quality] ?? SIZES.hd;
 
-  const tmpDir = path.join(root, 'data', 'tmp');
+  const tmpDir = path.join(root, 'data', 'tmp');   // служебная папка страницы рендера, не путать с DATA_DIR
   fs.mkdirSync(tmpDir, { recursive: true });
   const id = `${process.pid}-${Date.now()}`;
   const scenarioRel = `data/tmp/${id}.json`;
