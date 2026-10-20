@@ -128,8 +128,10 @@ function explain(status, body) {
   const all = `${code} ${message}`.toLowerCase();
   let hint;
   if (/unusual_activity|unusual activity/.test(all)) hint = 'ElevenLabs отключил бесплатный тариф для этого ключа: срабатывает защита от злоупотреблений (часто на серверах и VPN). Помогает платный тариф.';
-  else if (/quota|credits|character_limit/.test(all)) hint = 'В ElevenLabs закончились символы (кредиты) на этот месяц.';
-  else if (/library|free.?(user|tier)|payment_required|subscription|upgrade|paid/.test(all) || status === 402) hint = 'Это действие недоступно на вашем тарифе ElevenLabs (например, голоса из общей библиотеки или клонирование на бесплатном тарифе).';
+  // сначала ограничения тарифа: в их тексте тоже бывает слово credits («add $5 of credits»)
+  else if (/library voices/.test(all)) hint = 'На вашем тарифе ElevenLabs нельзя озвучивать через API голосами из общей библиотеки (Voice Library). Нужен платный тариф, либо выберите свой клон или встроенный голос.';
+  else if (/payment_required|free.?(user|tier)|upgrade|subscription|paid plan/.test(all) || status === 402) hint = 'Это действие недоступно на вашем тарифе ElevenLabs (нужен платный тариф).';
+  else if (/quota_exceeded|exceeds your quota|character_limit|not enough credits|insufficient/.test(all)) hint = 'В ElevenLabs закончились символы (кредиты) на этот месяц.';
   else if (status === 401) hint = 'ElevenLabs не принял ключ API (неверный, удалён или у ключа нет нужных прав).';
   else if (status === 404 || /voice.*not.*found|voice_not_found/.test(all)) hint = 'Голос не найден в аккаунте.';
   else if (status === 422) hint = 'ElevenLabs не принял запрос.';

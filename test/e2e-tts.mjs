@@ -28,6 +28,7 @@ const el = http.createServer((req, res) => {
       elCalls.push({ url: req.url, key: req.headers['xi-api-key'], method: 'GET' });
       res.setHeader('Content-Type', 'application/json');
       if (vm[1] === 'LIBVOICE000001') return res.end(JSON.stringify({ voice_id: 'LIBVOICE000001', name: 'Adam', category: 'premade' }));
+      if (vm[1] === 'PAIDVOICE00001') return res.end(JSON.stringify({ voice_id: 'PAIDVOICE00001', name: 'Artur', category: 'professional' }));
       res.statusCode = 404; return res.end('{"detail":{"status":"voice_not_found","message":"A voice with the voice_id was not found."}}');
     }
     if (req.url.startsWith('/v1/voices/add')) {
@@ -39,6 +40,7 @@ const el = http.createServer((req, res) => {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     elCalls.push({ url: req.url, key: req.headers['xi-api-key'], body });
     if (req.headers['xi-api-key'] !== 'testkey') { res.statusCode = 401; return res.end('{"detail":{"status":"invalid_api_key"}}'); }
+    if (req.url.includes('PAIDVOICE00001')) { res.statusCode = 402; return res.end('{"detail":{"status":"payment_required","message":"Free users cannot use library voices via the API. Upgrade to Creator or add $5 of credits to use this voice: https://elevenlabs.io/app/subscription/api"}}'); }
     // «озвучка»: тон длиной пропорционально тексту, с тишиной по краям
     const d = Math.max(1, body.text.length * 0.06);
     const out = path.join(work, `el_${elCalls.length}.mp3`);
@@ -218,6 +220,13 @@ try {
   await waitFor(has('editMessageText', 'Голос «Adam» добавлен'), 'голос добавлен по ссылке');
   await waitFor((c) => c.method === 'sendVoice' && c.raw.includes('Пробная фраза голосом «Adam»'), 'пробная фраза Adam', 30000);
   check(elCalls.some((c) => c.url.includes('/text-to-speech/LIBVOICE000001')), 'ID извлечён из ссылки, пробная фраза озвучена голосом Adam');
+  pushCb('vadd');
+  await sleep(300);
+  pushMsg({ text: 'PAIDVOICE00001' });
+  await waitFor(has('editMessageText', 'активным остался «Adam»'), 'платный голос не стал активным');
+  await waitFor(has('sendMessage', 'общей библиотеки'), 'понятная причина про тариф');
+  check(!calls.some((c) => c.raw.includes('закончились символы')), 'нет ложного «закончились символы»');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'voices.json'), 'utf8')).active === 'LIBVOICE000001', 'голос, недоступный на тарифе, в списке, но активным остался Adam');
 
   console.log('9. Новый ролик озвучивается активным голосом (Adam)');
   pushMsg({ text: '🎬 Создать видео' });

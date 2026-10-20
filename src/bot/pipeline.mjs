@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { validateScenario } from '../lib/validate.mjs';
 import { renderScenario } from '../lib/render.mjs';
 import { processRecording, assembleFromFiles, duration } from '../lib/audio.mjs';
-import { synthesizePhrases, countChars, cloneVoice, parseVoiceId, fetchVoiceInfo, addVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
+import { synthesizePhrases, countChars, cloneVoice, parseVoiceId, fetchVoiceInfo, addVoice, setActiveVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
 import { estimateDuration, layoutPhrases } from '../lib/timeline.mjs';
 import { jobDir, readScenario, updateJob, getJob, dataDir } from './store.mjs';
 
@@ -114,9 +114,13 @@ export async function addLibraryVoice(text) {
   const id = parseVoiceId(text);
   if (!id) throw new Error('Не похоже на ID голоса. Пришлите ID (латинские буквы и цифры, около 20 символов) или ссылку на голос из ElevenLabs.');
   const info = await fetchVoiceInfo(id);
+  const previous = currentVoiceId(dataDir);
   addVoice(dataDir, { id: info.id, name: info.name, source: 'library' });
   const preview = await samplePreview(info.id, path.join(dataDir, 'clone'));
-  return { ...info, preview };
+  // голос, которым ElevenLabs не даёт озвучивать (например, на бесплатном тарифе), не делаем активным
+  let active = true;
+  if (preview?.error && previous && previous !== info.id) { setActiveVoice(dataDir, previous); active = false; }
+  return { ...info, preview, active, previousName: active ? null : voiceName(dataDir, previous) };
 }
 
 export const ttsChars = (jobId) => countChars(readScenario(jobId).voiceover.map((v) => v.text), dataDir);

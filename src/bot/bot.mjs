@@ -88,8 +88,10 @@ async function acceptVoiceId(ctx, text) {
   try {
     const v = await addLibraryVoice(text);
     state.delete(ctx.chat.id);
-    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос «${v.name}» добавлен и выбран активным. Сменить: «🗣 Голоса».`);
-    if (v.preview?.error) await ctx.reply(`Пробная фраза не озвучилась: ${v.preview.error}`);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, v.active
+      ? `✅ Голос «${v.name}» добавлен и выбран активным. Сменить: «🗣 Голоса».`
+      : `➕ Голос «${v.name}» добавлен в список, но активным остался «${v.previousName}»: этим голосом пока не получается озвучить (см. ниже).`);
+    if (v.preview?.error) await ctx.reply(`⚠️ Пробная фраза не озвучилась. ${v.preview.error}`, { link_preview_options: { is_disabled: true } });
     else if (v.preview) await ctx.replyWithVoice(new InputFile(v.preview), { caption: `Пробная фраза голосом «${v.name}»` });
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `⚠️ ${e.message.slice(0, 600)}\n\nПришлите другой ID или нажмите «🗣 Голоса».`);
