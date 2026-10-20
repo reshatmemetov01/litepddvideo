@@ -85,8 +85,9 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
     for (let i = 0; i < (onlyFrames ? 1 : n); i++) {
       const page = await browser.newPage({ viewport: { width: W, height: H } });
       page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-      await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}&opts=${encodeURIComponent(JSON.stringify(look))}`);
-      await page.waitForFunction('window.ready === true || window.loadError', null, { timeout: 300000 });
+      await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}&opts=${encodeURIComponent(JSON.stringify(look))}`, { waitUntil: 'commit', timeout: 120000 });
+      // сцена грузит модели и текстуры сама; на слабом сервере это может занять несколько минут
+      await page.waitForFunction('window.ready === true || window.loadError', null, { timeout: 15 * 60000 });
       const loadError = await page.evaluate('window.loadError');
       if (loadError) throw new Error('Сцена не загрузилась: ' + loadError);
       pages.push(page);
