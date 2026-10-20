@@ -90,6 +90,7 @@ npm run render -- scenarios/q13_levo_svetofor.json --range 15-27            # к
 - **Люди:** модель со скелетом и клипами ходьбы и покоя (например, Mixamo). Шаг привязан к пройденному пути. Лицо модели по умолчанию смотрит в `+z` (как у Mixamo), иначе `"forward"`.
 - Проверка сценария сообщит, если модели нет в `models.json`.
 - Пример (CC0): машины из Kenney Car Kit — `kenney_sedan`, `kenney_police`, `kenney_ambulance`.
+- Дорожные знаки — наборы «Modular Russian Road Signs Pack (URBAN)» (Unka II) и «Модульный набор дорожных знаков (Дополнение)» (Staks), CC-BY 4.0. Зебры по умолчанию бело-жёлтые, `"crosswalks": [{"road": "z", "at": 0, "style": "white"}]` — только белые.
 - Лицензии моделей — поле `license` в `models.json`. ЗИЛ-131, МАЗ-203, КТМ-5 — CC-BY 4.0 (коммерческое использование можно, автора указать в описании ролика); VW Passat и BMW M5 — CC-BY-NC-SA (только некоммерческое).
 
 ## Формат сценария
@@ -104,7 +105,7 @@ npm run render -- scenarios/q13_levo_svetofor.json --range 15-27            # к
 | `scene.roads` | `["x","z"]` перекрёсток · `["z"]` одна дорога · `scene.crosswalks`: `z` зебр |
 | `scene.crosswalks` | число: зебра через дорогу вдоль z на этой координате; или `{road: "x"\|"z", at: число}` (на перекрёстке с зебрами стоп-линии отодвигаются) |
 | `scene.lights` | светофоры: `{pos: [x, z], rot, state: "red"\|"yellow"\|"green"\|"off"}` |
-| `scene.signs` | `type`: `main_road`, `yield`, `stop`, `ped_crossing`; `pos: [x, z]`; `rot` |
+| `scene.signs` | `type` — знак из каталога `src/web/world/sign-catalog.js` (около 40 знаков ПДД: `main_road`, `end_main_road`, `yield`, `stop`, `ped_crossing`, `no_left`, `no_entry`, `one_way`, `bus_stop`…); `pos: [x, z]`; `rot`; `size` (диаметр круглого знака, по умолчанию 0,8 м); `plate` — табличка под знаком (`main_direction` — 8.13, `zone_100`, `truck`…), `plateFlip: true` — отразить |
 | `objects` | `type`: `car`, `bus`, `truck`, `pedestrian`; `model` — своя 3D-модель (раздел выше); `color`; `path`: точки `{t, x, z, ease?, ctrl?}` (`ctrl` изгибает отрезок: поворот); `heading` (градусы) для стоящих; `appear: true` — виден только во время движения; `blinker: {side, t0, t1}` — поворотник |
 | `highlights`, `routes` | кольцо вокруг объекта · подсвеченная линия на земле |
 | `camera` | ключевые кадры `{t, pos, look, fov}` или слежение `{t, follow: "me", offset: [вперёд, вверх, вправо], look: "id" \| [x,y,z], lookOffset, focus: "id", fov}`; `cut: true` — монтажная склейка вместо плавного перелёта |

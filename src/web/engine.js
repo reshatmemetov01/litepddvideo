@@ -11,7 +11,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadSky, allLoaded, setMaxAnisotropy, loadGltf } from './world/assets.js';
 import { buildCity, groundY } from './world/city.js';
-import { makeSign, makeTrafficLight } from './world/props.js';
+import { makeSign, makeTrafficLight, preloadSigns } from './world/props.js';
 import { makeVehicle, makeVehicleFromModel, prepareVehicleModel, animateVehicle } from './world/vehicles.js';
 import { makePedestrian, makePedestrianFromModel, animatePedestrian, animateModelPedestrian } from './world/people.js';
 
@@ -140,6 +140,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   const roads = scenario.scene.roads ?? ['x', 'z'];
   const city = await buildCity(scene, scenario);
   (scenario.scene.lights ?? []).forEach((l) => scene.add(makeTrafficLight(l)));
+  await preloadSigns(scenario.scene.signs);
   (scenario.scene.signs ?? []).forEach((s) => scene.add(makeSign(s)));
 
   // объекты сценария

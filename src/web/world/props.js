@@ -1,5 +1,7 @@
 // Дорожные знаки и светофоры в реальных размерах.
 import * as THREE from 'three';
+import { loadGltf } from './assets.js';
+import { SIGNS, PLATES, SIGN_PACKS } from './sign-catalog.js';
 
 const KERB_H = 0.15;
 const galv = new THREE.MeshStandardMaterial({ color: 0xa9adb2, roughness: 0.35, metalness: 0.85 });
@@ -55,8 +57,96 @@ function signTextures(kind) {
   return signTex.get(kind);
 }
 
-/** Знак на стойке. pos: [x, z]; rot (градусы): 0 — лицом к +z. */
+// ---------- знаки из наборов моделей (sign-catalog.js) ----------
+const packs = {};          // набор → gltf
+const parts = new Map();   // "набор|узел|crop" → подготовленная группа (центр щита в 0, лицом к +z, в единицах набора)
+const PACK_UNIT = 0.4;     // 2 единицы набора (круглый знак) → 0,8 м
+
+/** Загружает наборы знаков, нужные сценарию (до makeSign). */
+export async function preloadSigns(defs = []) {
+  const need = new Set();
+  for (const d of defs) {
+    const s = SIGNS[d.type];
+    if (s?.node) need.add(s.pack ?? 'urban');
+    if (d.plate) need.add('urban');
+  }
+  await Promise.all([...need].map(async (k) => { packs[k] ??= await loadGltf(`/assets/models/${SIGN_PACKS[k]}`); }));
+}
+
+function packPart(pack, node, crop) {
+  const key = `${pack}|${node}|${crop ?? ''}`;
+  if (parts.has(key)) return parts.get(key);
+  const root = packs[pack].scene;
+  root.updateMatrixWorld(true);
+  const src = root.getObjectByName(node);
+  if (!src) throw new Error(`В наборе знаков нет узла ${node}`);
+  const meshes = [];
+  src.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  // геометрия в мировых координатах набора; crop — оставить треугольники верхнего знака
+  let geos = meshes.map((m) => { const g = m.geometry.clone().applyMatrix4(m.matrixWorld); return g.index ? g.toNonIndexed() : g; });
+  if (crop === 'top') {
+    const box = new THREE.Box3(); geos.forEach((g) => { g.computeBoundingBox(); box.union(g.boundingBox); });
+    const mid = (box.min.y + box.max.y) / 2;
+    geos = geos.map((g) => {
+      const pos = g.attributes.position, keep = [];
+      for (let t = 0; t < pos.count; t += 3) if ((pos.getY(t) + pos.getY(t + 1) + pos.getY(t + 2)) / 3 > mid) keep.push(t);
+      const out = new THREE.BufferGeometry();
+      for (const [name, a] of Object.entries(g.attributes)) {
+        const arr = new a.array.constructor(keep.length * 3 * a.itemSize);
+        keep.forEach((t, k) => arr.set(a.array.subarray(t * a.itemSize, (t + 3) * a.itemSize), k * 3 * a.itemSize));
+        out.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize, a.normalized));
+      }
+      return out;
+    });
+  }
+  const box = new THREE.Box3(); geos.forEach((g) => { g.computeBoundingBox(); if (g.attributes.position.count) box.union(g.boundingBox); });
+  const c = box.getCenter(new THREE.Vector3());
+  const grp = new THREE.Group();
+  geos.forEach((g, i) => {
+    if (!g.attributes.position.count) return;
+    g.translate(-c.x, -c.y, -box.min.z);
+    const mat = meshes[i].material;
+    if (crop) mat.side = THREE.DoubleSide;   // в «Дополнении» у знаков нет оборота
+    grp.add(shadowed(new THREE.Mesh(g, mat)));
+  });
+  grp.userData.size = box.getSize(new THREE.Vector3());
+  parts.set(key, grp);
+  return grp;
+}
+
+/** Знак на стойке. pos: [x, z]; rot (градусы): 0 — лицом к +z. size — диаметр круглого знака, м; plate — табличка под знаком. */
 export function makeSign(def) {
+  const cat = SIGNS[def.type];
+  if (cat?.node && packs[cat.pack ?? 'urban']) return makePackSign(def, cat);
+  return makeDrawnSign(def);
+}
+
+function makePackSign(def, cat) {
+  const g = new THREE.Group();
+  const k = PACK_UNIT * ((def.size ?? 0.8) / 0.8);
+  const plateY = def.height ?? 2.6;
+  const face = packPart(cat.pack ?? 'urban', cat.node, cat.crop).clone();
+  face.scale.setScalar(k); face.position.set(0, plateY, 0.045);
+  g.add(face);
+  const fh = face.userData.size.y * k;
+  if (def.plate) {
+    const pc = PLATES[def.plate];
+    const plate = packPart('urban', pc.node).clone();
+    const ph = plate.userData.size.y * k;
+    plate.scale.set(def.plateFlip ? -k : k, k, k);
+    plate.position.set(0, plateY - fh / 2 - 0.06 - ph / 2, 0.045);
+    g.add(plate);
+  }
+  const top = plateY + fh / 2 + 0.05;
+  const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, top, 12), galv));
+  pole.position.y = top / 2; g.add(pole);
+  g.add(shadowed(new THREE.Mesh(new THREE.SphereGeometry(0.04, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), galv)).translateY(top));
+  g.position.set(def.pos[0], KERB_H, def.pos[1]);
+  g.rotation.y = ((def.rot ?? 0) * Math.PI) / 180;
+  return g;
+}
+
+function makeDrawnSign(def) {
   const g = new THREE.Group();
   const size = def.size ?? 0.9;            // типоразмер II: ~0,9 м
   const plateY = def.height ?? 2.6;        // центр щита над тротуаром

@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseAnchor } from './timeline.mjs';
+import { SIGNS, PLATES } from '../web/world/sign-catalog.js';
 
 const MODELS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'models', 'models.json');
 const knownModels = () => { try { return JSON.parse(fs.readFileSync(MODELS, 'utf8')); } catch { return {}; } };
 
 const OBJECT_TYPES = ['car', 'bus', 'truck', 'tram', 'pedestrian'];
 const LIGHT_STATES = ['red', 'yellow', 'green', 'off'];
-const SIGN_TYPES = ['main_road', 'yield', 'stop', 'ped_crossing'];
+const SIGN_TYPES = Object.keys(SIGNS);
 const ROADS = [['x', 'z'], ['z'], ['x']];
 
 export function validateScenario(s) {
@@ -32,6 +33,7 @@ export function validateScenario(s) {
   (s.scene?.signs ?? []).forEach((g, i) => {
     if (!SIGN_TYPES.includes(g.type)) err(`scene.signs[${i + 1}]: тип «${g.type}» неизвестен (${SIGN_TYPES.join(', ')})`);
     if (!Array.isArray(g.pos) || g.pos.length !== 2) err(`scene.signs[${i + 1}]: pos должен быть [x, z]`);
+    if (g.plate && !PLATES[g.plate]) err(`scene.signs[${i + 1}]: табличка «${g.plate}» неизвестна (${Object.keys(PLATES).join(', ')})`);
   });
 
   (s.scene?.lights ?? []).forEach((l, i) => {

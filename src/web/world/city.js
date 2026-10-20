@@ -26,6 +26,7 @@ function makeMaterials() {
     curb: pbr('brushed_concrete', { size: 1.5, color: 0xe6e6e6 }),
     grass: pbr('sparse_grass', { size: 3, color: 0x93c45e }),
     marking: new THREE.MeshStandardMaterial({ color: 0xcfcfc9, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    markingYellow: new THREE.MeshStandardMaterial({ color: 0xf0bf00, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
     plaster: [0xf2e6c9, 0xe9ecef, 0xf0d9c2, 0xdde6ea, 0xefe7d6].map((c) => pbr('grey_plaster', { size: 4, color: c })),
     brick: pbr('brick_4', { size: 2.2, color: 0xe8d0c0 }),
     concrete: pbr('brushed_concrete', { size: 3, color: 0xcfcfcf }),
@@ -91,7 +92,7 @@ function markings(scene, M, roads, crosswalks) {
     if (cross && Math.abs(s) < W / 2 + (crosswalks.length ? 9 : 1.2)) return true;   // центр перекрёстка и зебры
     return cwAt(axis).some((c) => Math.abs(s - c) < 2.6);
   };
-  const put = (x, z, sx, sz) => { m4.makeScale(sx, 1, sz).setPosition(x, 0.006, z); inst.add('mark', dash, M.marking, m4); };
+  const put = (x, z, sx, sz, yellow = false) => { m4.makeScale(sx, 1, sz).setPosition(x, 0.006, z); inst.add(yellow ? 'markY' : 'mark', dash, yellow ? M.markingYellow : M.marking, m4); };
   // осевая — пунктир 3 м через 6 м
   for (const axis of ['x', 'z']) {
     if (!roads.includes(axis)) continue;
@@ -106,10 +107,12 @@ function markings(scene, M, roads, crosswalks) {
     const so = crosswalks.length ? 9.6 : W / 2 + 0.8;
     put(2, so, 4, 0.4); put(-2, -so, 4, 0.4); put(so, -2, 0.4, 4); put(-so, 2, 0.4, 4);
   }
-  // зебры: полосы 0,5 м с шагом 1 м, длиной 4 м по ходу движения
+  // зебры: белые полосы 0,5 м с шагом 1 м, длиной 4 м по ходу движения; между ними жёлтые (как в городах РФ),
+  // style: "white" — только белые
   for (const c of crosswalks) {
-    const { road, at } = typeof c === 'number' ? { road: 'z', at: c } : c;
+    const { road, at, style } = typeof c === 'number' ? { road: 'z', at: c } : c;
     for (let i = -3.5; i <= 3.5; i += 1) road === 'z' ? put(i, at, 0.5, 4) : put(at, i, 4, 0.5);
+    if (style !== 'white') for (let i = -3; i <= 3; i += 1) road === 'z' ? put(i, at, 0.4, 4, true) : put(at, i, 4, 0.4, true);
   }
   inst.flush(scene);
 }
