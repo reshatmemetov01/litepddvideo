@@ -94,7 +94,7 @@ await new Promise((r) => server.once('listening', r));
 const port = server.address().port;
 
 const bot = spawn('node', ['src/bot/bot.mjs'], {
-  cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
+  cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true,   // своя группа процессов: при завершении гасим и Chromium/ffmpeg рендера
   env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, ELEVENLABS_API_KEY: 'testkey', ELEVENLABS_API_ROOT: `http://127.0.0.1:${el.address().port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
 });
 let botLog = '';
@@ -258,10 +258,11 @@ try {
   console.error('\nОШИБКА:', e.message);
   failed = true;
 } finally {
-  bot.kill('SIGKILL');
+  try { process.kill(-bot.pid, 'SIGKILL'); } catch { bot.kill('SIGKILL'); }
+  await sleep(300);
   server.close();
   el.close();
-  fs.rmSync(work, { recursive: true, force: true });
+  fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
 }
 console.log(failed ? '\nТЕСТ НЕ ПРОЙДЕН' : '\nТЕСТ ПРОЙДЕН');
 process.exit(failed ? 1 : 0);
