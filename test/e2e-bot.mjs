@@ -110,6 +110,15 @@ try {
   pushMsg({ document: { file_id: 'doc1', file_name: 'q13.json', mime_type: 'application/json' } });
   await waitFor(has('sendMessage', 'Фразы для озвучки (8)'), 'разбор сценария');
   check(true, 'сценарий принят, 8 фраз');
+  const scenMsg = calls.filter((c) => c.method === 'sendMessage' && c.raw.includes('eltext:')).at(-1);
+  const elData = scenMsg?.raw.match(/"callback_data":"(eltext:[^"]+)"/)?.[1];
+  check(!!elData, 'есть кнопка «Текст для ElevenLabs»');
+  pushCb(elData);
+  const elText = await waitFor((c) => c.method === 'sendMessage' && c.body.text?.startsWith('<pre>'), 'текст для ElevenLabs');
+  const t = elText.body.text;
+  check((t.match(/&lt;break time="1\.5s" \/&gt;/g) ?? []).length === 7, 'между 8 фразами 7 меток паузы (экранированы для Telegram)');
+  check(t.includes('пэ-дэ-дэ') && !t.includes('ПДД') && !/\[[gry]\]/.test(t), 'произношение исправлено, разметка субтитров убрана');
+  check(t.includes('у нас нет.'), 'фразы без точки получили точку');
 
   console.log('3. Голосовое → обработка → ждём подтверждения');
   pushMsg({ voice: { file_id: 'v1', duration: 30, mime_type: 'audio/ogg' } });

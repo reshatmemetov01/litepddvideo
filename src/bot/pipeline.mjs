@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { validateScenario } from '../lib/validate.mjs';
 import { renderScenario } from '../lib/render.mjs';
 import { processRecording, assembleFromFiles, duration } from '../lib/audio.mjs';
-import { synthesizePhrases, countChars, cloneVoice, parseVoiceId, fetchVoiceInfo, addVoice, setActiveVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
+import { synthesizePhrases, countChars, cloneVoice, elevenLabsText, parseVoiceId, fetchVoiceInfo, addVoice, setActiveVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
 import { estimateDuration, layoutPhrases } from '../lib/timeline.mjs';
 import { jobDir, readScenario, updateJob, getJob, dataDir } from './store.mjs';
 
@@ -122,6 +122,8 @@ export async function addLibraryVoice(text) {
   if (preview?.error && previous && previous !== info.id) { setActiveVoice(dataDir, previous); active = false; }
   return { ...info, preview, active, previousName: active ? null : voiceName(dataDir, previous) };
 }
+
+export const textForElevenLabs = (jobId) => elevenLabsText(readScenario(jobId).voiceover.map((v) => v.text), dataDir);
 
 export const ttsChars = (jobId) => countChars(readScenario(jobId).voiceover.map((v) => v.text), dataDir);
 

@@ -4,7 +4,7 @@ import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob, dataDir } from './store.mjs';
-import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, cloneFromRecording, addLibraryVoice, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
+import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, textForElevenLabs, cloneFromRecording, addLibraryVoice, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
 import { ttsConfigured, ttsKeySet, getUsage, loadVoices, currentVoice, setActiveVoice, removeVoice } from '../lib/tts.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
 import { layoutPhrases } from '../lib/timeline.mjs';
@@ -138,7 +138,7 @@ async function showJob(ctx, job) {
     kb.text('🎙 Перезаписать озвучку', `voice:${job.id}`).row().text('🖥 Full HD (1080p)', `render:${job.id}:fhd`);
   } else {
     if (ttsConfigured(dataDir)) addTtsButtons(kb, job.id);
-    kb.text('🎙 Записать озвучку', `voice:${job.id}`).row().text('🧪 Черновик без голоса', `draft:${job.id}`);
+    kb.text('🎙 Записать озвучку', `voice:${job.id}`).row().text('📋 Текст для ElevenLabs', `eltext:${job.id}`).row().text('🧪 Черновик без голоса', `draft:${job.id}`);
     if (job.status === 'failed' || job.status === 'interrupted') kb.row().text('🔁 Повторить', `render:${job.id}:${QUALITY}`);
   }
   await ctx.reply(job.status === 'failed' ? `⚠️ ${esc(job.error ?? 'ошибка')}` : 'Что делаем дальше?', { ...HTML, reply_markup: kb });
@@ -156,6 +156,20 @@ function addTtsButtons(kb, jobId, withChars = false) {
   if (loadVoices(dataDir).voices.length > 1) kb.text('🗣 Озвучить другим голосом', `ttsc:${jobId}`).row();
   return kb;
 }
+// ---- ручная озвучка на сайте ElevenLabs: бот выдаёт текст с паузами, вы присылаете готовый mp3 ----
+bot.callbackQuery(/^eltext:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const job = getJob(ctx.match[1]);
+  if (!job) return ctx.reply('Не нашёл этот ролик.');
+  state.set(ctx.chat.id, { mode: 'voice', jobId: job.id });
+  await ctx.reply('📋 Нажмите на текст, чтобы скопировать, и вставьте его в ElevenLabs целиком:', HTML);
+  await ctx.reply(`<pre>${esc(textForElevenLabs(job.id))}</pre>`, HTML);
+  await ctx.reply(
+    '1. Модель <b>Eleven Multilingual v2</b>, язык русский или Auto.\n' +
+    '2. Метки <code>&lt;break time="1.5s" /&gt;</code> не удаляйте: это паузы между фразами, по ним я разрежу озвучку. Вслух они не читаются.\n' +
+    '3. Скачайте mp3 и пришлите его сюда (файлом или как аудио). Дальше всё как с голосовым: пришлю на проверку, после «Всё хорошо» начну рендер.', HTML);
+});
+
 bot.callbackQuery(/^ttsc:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   const kb = new InlineKeyboard();
@@ -251,6 +265,7 @@ async function acceptScenario(ctx, text) {
   state.set(ctx.chat.id, { mode: 'voice', jobId: job.id });
   const kb = new InlineKeyboard();
   if (ttsConfigured(dataDir)) addTtsButtons(kb, job.id, true);
+  kb.text('📋 Текст для ElevenLabs (озвучу на сайте)', `eltext:${job.id}`).row();
   kb.text('🧪 Черновик без голоса', `draft:${job.id}`).text('❌ Отмена', 'cancel');
   await ctx.reply(describeScenario(scenario), HTML);
   await ctx.reply(VOICE_INSTRUCTION, { ...HTML, reply_markup: kb });

@@ -106,6 +106,7 @@ function loadDictionary(dataDir) {
 /** Текст для озвучки: без цветовой разметки субтитров, с исправленным произношением. */
 export function speechText(text, dictionary = {}) {
   let t = text.replace(/\[\/?[gry]\]/g, '').replace(/\s+/g, ' ').trim();
+  if (!/[.!?…]$/.test(t)) t += '.';   // без точки в конце голос «повисает» на интонации
   for (const [word, say] of Object.entries(dictionary)) {
     const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     t = t.replace(new RegExp(`(?<![\\p{L}\\d])${esc}(?![\\p{L}\\d])`, 'gu'), say);
@@ -181,6 +182,16 @@ export async function synthesizePhrases(texts, { dataDir, fresh = false, voiceId
 }
 
 /** Сколько символов потратит озвучка (без учёта кэша). */
+/**
+ * Текст для ручной озвучки на сайте ElevenLabs: фразы с паузами-метками между ними.
+ * Паузы нужны боту, чтобы потом разрезать готовый mp3 на фразы. ElevenLabs допускает паузы до 3 с.
+ */
+export const BREAK_TAG = '<break time="1.5s" />';
+export function elevenLabsText(texts, dataDir) {
+  const d = loadDictionary(dataDir);
+  return texts.map((t) => speechText(t, d)).join(` ${BREAK_TAG}\n`);
+}
+
 export const countChars = (texts, dataDir) => { const d = loadDictionary(dataDir); return texts.reduce((s, t) => s + speechText(t, d).length, 0); };
 
 /** Остаток символов в аккаунте (если у ключа есть доступ). */
