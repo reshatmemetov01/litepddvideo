@@ -91,6 +91,7 @@ export function validateScenario(s) {
     }
     (s.card.windows ?? []).forEach((w, i) => w.forEach((x, k) => checkTime(x, `card.windows[${i + 1}][${k + 1}]`)));
     checkTime(s.card.reveal, 'card.reveal');
+    (s.card.notes ?? []).forEach((n, i) => { if (!n.text) err(`card.notes[${i + 1}]: нет text`); checkTime(n.t0, `card.notes[${i + 1}].t0`); checkTime(n.t1, `card.notes[${i + 1}].t1`); });
   }
   if (s.cta) { checkTime(s.cta.t0, 'cta.t0'); checkTime(s.cta.t1, 'cta.t1'); }
   return errors;

@@ -278,10 +278,11 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
     const r = c.correctRect;
     d.innerHTML = `<div class="imgwrap"><img src="${src}">` +
       (r ? `<div class="hl" style="left:${r[0] * 100}%;top:${r[1] * 100}%;width:${r[2] * 100}%;height:${r[3] * 100}%"></div>` : '') +
-      `</div><div class="badge">✓ Правильный ответ: ${c.correct + 1}</div>`;
+      `</div><div class="badge">✓ Правильный ответ: ${c.correct + 1}</div>` +
+      (c.notes ?? []).map((n) => `<div class="note">${markup(n.text)}</div>`).join('');
     const imgEl = d.querySelector('img');
     await imgEl.decode().catch(() => { throw new Error('Не удалось загрузить картинку вопроса'); });
-    card = { c, d, answers: [], hl: d.querySelector('.hl'), badge: d.querySelector('.badge') };
+    card = { c, d, answers: [], hl: d.querySelector('.hl'), badge: d.querySelector('.badge'), notes: [...d.querySelectorAll('.note')] };
   } else if (scenario.card) {
     const d = el('card');
     d.innerHTML = `<div class="card-h">Вопрос из билета</div>
@@ -335,7 +336,9 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
 
     // оверлей
     for (const { h, d } of hooks) vis(d, win(t, h.t0, h.t1));
-    for (const { v, d } of captions) vis(d, win(t, v.t0, v.t1, 0.12));
+    // пока на экране карточка вопроса, субтитры опускаются ниже неё
+    const cardOn = card ? Math.max(...card.c.windows.map(([a, b]) => win(t, a, b, 0.35))) : 0;
+    for (const { v, d } of captions) { vis(d, win(t, v.t0, v.t1, 0.12)); d.style.transform = `translateY(${cardOn * 13}rem)`; }
     for (const { l, d } of labels) {
       const on = win(t, l.t0, l.t1);
       vis(d, on);
@@ -359,6 +362,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       const rev = t >= card.c.reveal;
       if (card.badge) card.badge.style.display = rev ? '' : 'none';
       if (card.hl) card.hl.style.display = rev ? '' : 'none';
+      card.notes?.forEach((n, k) => vis(n, win(t, card.c.notes[k].t0, card.c.notes[k].t1)));
       card.answers.forEach((n, k) => {
         n.classList.toggle('ok', rev && k === card.c.correct);
         n.classList.toggle('dim', rev && k !== card.c.correct);
