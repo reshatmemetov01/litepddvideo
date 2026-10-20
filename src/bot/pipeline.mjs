@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { validateScenario } from '../lib/validate.mjs';
 import { renderScenario } from '../lib/render.mjs';
 import { processRecording, assembleFromFiles, duration } from '../lib/audio.mjs';
-import { synthesizePhrases, countChars, cloneVoice } from '../lib/tts.mjs';
+import { synthesizePhrases, countChars, cloneVoice, parseVoiceId, fetchVoiceInfo, addVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
 import { estimateDuration, layoutPhrases } from '../lib/timeline.mjs';
 import { jobDir, readScenario, updateJob, getJob, dataDir } from './store.mjs';
 
@@ -56,16 +56,17 @@ async function makePreview(track, dir) {
 }
 
 /** Озвучка текста сценария клонированным голосом. fresh: новый дубль без кэша (тратит символы заново). */
-export async function prepareTts(jobId, { fresh = false } = {}) {
+export async function prepareTts(jobId, { fresh = false, voiceId = currentVoiceId(dataDir) } = {}) {
   const s = readScenario(jobId);
   const dir = path.join(jobDir(jobId), 'voice');
-  const r = await synthesizePhrases(s.voiceover.map((v) => v.text), { dataDir, fresh });
+  const r = await synthesizePhrases(s.voiceover.map((v) => v.text), { dataDir, fresh, voiceId });
   const track = path.join(dir, 'voice.wav');
   const durations = await assembleFromFiles(r.files, track, dir);
   for (let i = 0; i < r.files.length; i++) fs.rmSync(path.join(dir, `phrase${i}.wav`), { force: true });
   const preview = await makePreview(track, dir);
-  updateJob(jobId, { status: 'voice_ready', voice: { track, durations, source: 'tts' } });
-  return { track, durations, preview, chars: r.chars, fromCache: r.fromCache };
+  const name = voiceName(dataDir, voiceId);
+  updateJob(jobId, { status: 'voice_ready', voice: { track, durations, source: 'tts', voiceId, voiceName: name } });
+  return { track, durations, preview, chars: r.chars, fromCache: r.fromCache, voiceName: name };
 }
 
 const ffmpeg = (args) => new Promise((res, rej) => spawn('ffmpeg', ['-y', '-v', 'error', ...args]).on('close', (c) => (c ? rej(new Error('ffmpeg не смог прочитать файл')) : res())));
@@ -89,17 +90,33 @@ export async function cloneFromRecording(rawPath) {
     const name = `Голос для роликов ПДД ${new Date().toISOString().slice(0, 10)}`;
     const { voiceId, previous } = await cloneVoice(sample, { dataDir, name });
     // пробная фраза новым голосом
-    let preview = null;
-    try {
-      const r = await synthesizePhrases([SAMPLE_TEXT], { dataDir, fresh: true });
-      preview = path.join(dir, 'test.ogg');
-      await ffmpeg(['-i', r.files[0], '-c:a', 'libopus', '-b:a', '48k', preview]);
-    } catch (e) { preview = { error: e.message }; }
+    const preview = await samplePreview(voiceId, dir);
     return { voiceId, seconds, previous, preview };
   } finally {
     fs.rmSync(rawPath, { force: true });
     fs.rmSync(sample, { force: true });
   }
+}
+
+/** Пробная фраза голосом (для проверки на слух). Ошибка не прерывает добавление голоса. */
+async function samplePreview(voiceId, dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const r = await synthesizePhrases([SAMPLE_TEXT], { dataDir, fresh: true, voiceId });
+    const preview = path.join(dir, `test-${voiceId}.ogg`);
+    await ffmpeg(['-i', r.files[0], '-c:a', 'libopus', '-b:a', '48k', preview]);
+    return preview;
+  } catch (e) { return { error: e.message }; }
+}
+
+/** Голос из ElevenLabs по ID или ссылке: проверка через API, добавление в список бота, пробная фраза. */
+export async function addLibraryVoice(text) {
+  const id = parseVoiceId(text);
+  if (!id) throw new Error('Не похоже на ID голоса. Пришлите ID (латинские буквы и цифры, около 20 символов) или ссылку на голос из ElevenLabs.');
+  const info = await fetchVoiceInfo(id);
+  addVoice(dataDir, { id: info.id, name: info.name, source: 'library' });
+  const preview = await samplePreview(info.id, path.join(dataDir, 'clone'));
+  return { ...info, preview };
 }
 
 export const ttsChars = (jobId) => countChars(readScenario(jobId).voiceover.map((v) => v.text), dataDir);

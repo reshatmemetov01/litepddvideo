@@ -23,6 +23,13 @@ const el = http.createServer((req, res) => {
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     if (req.url.startsWith('/v1/user/subscription')) { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ character_count: 1234, character_limit: 30000 })); }
+    const vm = req.method === 'GET' && req.url.match(/^\/v1\/voices\/([A-Za-z0-9]+)$/);
+    if (vm) {
+      elCalls.push({ url: req.url, key: req.headers['xi-api-key'], method: 'GET' });
+      res.setHeader('Content-Type', 'application/json');
+      if (vm[1] === 'LIBVOICE000001') return res.end(JSON.stringify({ voice_id: 'LIBVOICE000001', name: 'Adam', category: 'premade' }));
+      res.statusCode = 404; return res.end('{"detail":{"status":"voice_not_found","message":"A voice with the voice_id was not found."}}');
+    }
     if (req.url.startsWith('/v1/voices/add')) {
       const raw = Buffer.concat(chunks);
       elCalls.push({ url: req.url, key: req.headers['xi-api-key'], multipart: /multipart\/form-data/.test(req.headers['content-type']), size: raw.length, hasName: raw.toString('latin1').includes('name="name"') });
@@ -130,7 +137,7 @@ try {
   await waitFor(has('sendMessage', 'Фразы для озвучки (8)'), 'разбор сценария');
   check(true, 'сценарий принят, 8 фраз');
 
-  check(!calls.some(has('sendMessage', 'Озвучить моим голосом')), 'пока голос не склонирован, кнопки озвучки нет');
+  check(!calls.some(has('sendMessage', 'Озвучить:')), 'пока голос не склонирован, кнопки озвучки нет');
 
   console.log('3. /clone: короткая запись отклоняется, нормальная клонируется');
   pushMsg({ text: '🧬 Клонировать голос' });
@@ -144,17 +151,17 @@ try {
   check(add?.multipart && add.key === 'testkey' && add.hasName && add.size > 100000, 'запись ушла в ElevenLabs (multipart, ключ, имя)');
   await waitFor((c) => c.method === 'sendVoice' && c.raw.includes('Пробная фраза'), 'пробная фраза новым голосом', 30000);
   check(elCalls.some((c) => c.url.includes('/text-to-speech/CLONED1')), 'пробная фраза озвучена новым голосом');
-  check(fs.existsSync(path.join(work, 'data', 'voice.json')) && JSON.parse(fs.readFileSync(path.join(work, 'data', 'voice.json'), 'utf8')).voiceId === 'CLONED1', 'ID клона сохранён ботом');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'voices.json'), 'utf8')).active === 'CLONED1', 'ID клона сохранён ботом и выбран активным');
   check(!fs.existsSync(path.join(work, 'data', 'clone', 'raw.mp3')), 'исходная запись удалена после клонирования');
   pushMsg({ text: '/voice', entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
   await waitFor(has('sendMessage', 'CLONED1'), '/voice показывает голос');
   check(true, '/voice показывает текущий клон');
 
-  console.log('3b. Новый сценарий: кнопка «Озвучить моим голосом» появилась');
+  console.log('3b. Новый сценарий: появилась кнопка «Озвучить: <голос>»');
   pushMsg({ text: '🎬 Создать видео' });
   await sleep(500);
   pushMsg({ document: { file_id: 'doc1', file_name: 'q13.json', mime_type: 'application/json' } });
-  const scen = await waitFor(has('sendMessage', 'Озвучить моим голосом'), 'кнопка озвучки');
+  const scen = await waitFor(has('sendMessage', 'Озвучить: Голос для роликов'), 'кнопка озвучки с именем клона');
   const ttsData = scen.raw.match(/"callback_data":"(tts:[^"]+)"/)?.[1];
   check(!!ttsData && /симв\./.test(scen.raw), `кнопка есть (${ttsData})`);
   const chars = +scen.raw.match(/\((\d+) симв\./)[1];
@@ -194,6 +201,59 @@ try {
   pushCb(okData);
   await waitFor((c) => c.method === 'sendMessage' && (c.raw.includes('Начинаю рендер') || c.raw.includes('В очереди')), 'старт рендера');
   check(true, 'после «Всё хорошо» пошёл рендер');
+
+  console.log('8. Голоса ElevenLabs по ID');
+  pushMsg({ text: '🗣 Голоса' });
+  const list = await waitFor(has('sendMessage', 'Голоса для озвучки'), 'список голосов');
+  check(list.raw.includes('CLONED1') && list.raw.includes('"callback_data":"vadd"'), 'в списке есть клон и кнопка добавления по ID');
+  pushCb('vadd');
+  await waitFor(has('sendMessage', 'Пришлите ID голоса'), 'просьба прислать ID');
+  pushMsg({ text: 'привет' });
+  await waitFor(has('editMessageText', 'Не похоже на ID'), 'отказ на мусоре');
+  check(true, 'текст без ID отклонён');
+  pushMsg({ text: 'BADVOICE000001' });
+  await waitFor(has('editMessageText', 'недоступен вашему аккаунту'), 'отказ на чужом ID');
+  check(true, 'неизвестный ID: понятная ошибка про «добавьте в мои голоса»');
+  pushMsg({ text: 'https://elevenlabs.io/app/voice-library?voiceId=LIBVOICE000001' });
+  await waitFor(has('editMessageText', 'Голос «Adam» добавлен'), 'голос добавлен по ссылке');
+  await waitFor((c) => c.method === 'sendVoice' && c.raw.includes('Пробная фраза голосом «Adam»'), 'пробная фраза Adam', 30000);
+  check(elCalls.some((c) => c.url.includes('/text-to-speech/LIBVOICE000001')), 'ID извлечён из ссылки, пробная фраза озвучена голосом Adam');
+
+  console.log('9. Новый ролик озвучивается активным голосом (Adam)');
+  pushMsg({ text: '🎬 Создать видео' });
+  await sleep(500);
+  const nCalls = calls.length;
+  pushMsg({ document: { file_id: 'doc1', file_name: 'q13.json', mime_type: 'application/json' } });
+  const scen2 = await waitFor((c) => calls.indexOf(c) >= nCalls && c.method === 'sendMessage' && c.raw.includes('Озвучить: Adam'), 'кнопка с именем голоса');
+  const tts2 = scen2.raw.match(/"callback_data":"(tts:[^"]+)"/)[1];
+  const ttsc2 = scen2.raw.match(/"callback_data":"(ttsc:[^"]+)"/)?.[1];
+  check(!!ttsc2, 'есть кнопка «Озвучить другим голосом»');
+  const adamBefore = elCalls.filter((c) => c.url.includes('/text-to-speech/LIBVOICE000001')).length;
+  const vb = voices();
+  pushCb(tts2);
+  await waitFor(() => voices() === vb + 1, 'озвучка Adam', 90000);
+  check(elCalls.filter((c) => c.url.includes('/text-to-speech/LIBVOICE000001')).length - adamBefore === 8, 'все 8 фраз озвучены голосом Adam');
+  check(calls.some(has('editMessageText', 'голосом «Adam»')), 'бот пишет, каким голосом озвучено');
+
+  console.log('10. Для одного ролика можно выбрать другой голос (клон), активный не меняется');
+  pushCb(ttsc2);
+  const pick = await waitFor(has('sendMessage', 'Каким голосом озвучить этот ролик'), 'выбор голоса');
+  const toClone = pick.raw.match(/"callback_data":"(ttsv:[^"]+:CLONED1)"/)?.[1];
+  check(!!toClone, 'в выборе есть клон');
+  const cloneBefore = elCalls.filter((c) => c.url.includes('/text-to-speech/CLONED1')).length;
+  pushCb(toClone);
+  await waitFor(() => voices() === vb + 2, 'озвучка клоном', 90000);
+  check(elCalls.filter((c) => c.url.includes('/text-to-speech/CLONED1')).length === cloneBefore, 'текст уже озвучивался клоном: взят из кэша, символы не потрачены');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'voices.json'), 'utf8')).active === 'LIBVOICE000001', 'активный голос остался Adam');
+
+  console.log('11. Смена активного голоса и удаление из списка');
+  pushCb('vsel:CLONED1');
+  await waitFor((c) => c.method === 'answerCallbackQuery' && c.raw.includes('Голос выбран'), 'голос выбран');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'voices.json'), 'utf8')).active === 'CLONED1', 'активный теперь клон');
+  pushCb('vdel:LIBVOICE000001');
+  await waitFor((c) => c.method === 'answerCallbackQuery' && c.raw.includes('Убран из списка'), 'голос убран');
+  const reg = JSON.parse(fs.readFileSync(path.join(work, 'data', 'voices.json'), 'utf8'));
+  check(!reg.voices.some((v) => v.id === 'LIBVOICE000001') && reg.active === 'CLONED1', 'Adam убран из списка, клон остался активным');
 } catch (e) {
   console.error('\nОШИБКА:', e.message);
   failed = true;

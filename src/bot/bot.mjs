@@ -4,8 +4,8 @@ import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob, dataDir } from './store.mjs';
-import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, cloneFromRecording, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
-import { ttsConfigured, ttsKeySet, getUsage, savedVoice, currentVoiceId } from '../lib/tts.mjs';
+import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, cloneFromRecording, addLibraryVoice, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
+import { ttsConfigured, ttsKeySet, getUsage, loadVoices, currentVoice, setActiveVoice, removeVoice } from '../lib/tts.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
 import { layoutPhrases } from '../lib/timeline.mjs';
 import { ensureSpace, startCleanupTimer, freeGB, dirSizeMB, MIN_FREE_GB, RETENTION_DAYS } from './cleanup.mjs';
@@ -22,7 +22,7 @@ const API_ROOT = process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org';   
 const bot = new Bot(token, { client: { apiRoot: API_ROOT } });
 const state = new Map();   // chatId → { mode: 'scenario' | 'voice', jobId }
 
-const menu = new Keyboard().text('🎬 Создать видео').text('📋 Мои ролики').row().text('🧬 Клонировать голос').resized();
+const menu = new Keyboard().text('🎬 Создать видео').text('📋 Мои ролики').row().text('🗣 Голоса').text('🧬 Клонировать голос').resized();
 const HTML = { parse_mode: 'HTML' };
 
 bot.use(async (ctx, next) => {
@@ -45,18 +45,56 @@ const CLONE_INSTRUCTION =
 async function startClone(ctx) {
   if (!ttsKeySet()) return ctx.reply('Не задан ключ ElevenLabs: впишите ELEVENLABS_API_KEY в .env на сервере и перезапустите бота.');
   state.set(ctx.chat.id, { mode: 'clone' });
-  const cur = savedVoice(dataDir);
-  const note = cur ? `\n\nСейчас используется клон от ${new Date(cur.createdAt).toLocaleDateString('ru-RU')}. Новый клон заменит его в боте.` : '';
+  const cur = loadVoices(dataDir).voices.find((v) => v.source === 'clone');
+  const note = cur ? `\n\nУ вас уже есть клон «${esc(cur.name)}». Новый клон станет активным голосом.` : '';
   await ctx.reply(CLONE_INSTRUCTION + note, { ...HTML, reply_markup: new InlineKeyboard().text('❌ Отмена', 'cancel') });
 }
 bot.command('clone', startClone);
 bot.hears('🧬 Клонировать голос', startClone);
-bot.command('voice', (ctx) => {
-  const cur = savedVoice(dataDir), id = currentVoiceId(dataDir);
-  if (!ttsKeySet()) return ctx.reply('Озвучка через ElevenLabs не настроена: нет ELEVENLABS_API_KEY в .env.');
-  if (!id) return ctx.reply('Голос ещё не склонирован. Команда /clone.');
-  return ctx.reply(cur ? `🗣 Голос: клон от ${new Date(cur.createdAt).toLocaleString('ru-RU')}\nID: ${id}` : `🗣 Голос из .env (ELEVENLABS_VOICE_ID)\nID: ${id}`);
+// ---- голоса: список, выбор, добавление по ID ----
+const SOURCE = { clone: '🧬 клон', library: '📚 ElevenLabs', env: '⚙️ из .env' };
+function voicesView() {
+  const reg = loadVoices(dataDir), cur = currentVoice(dataDir);
+  const lines = reg.voices.map((v) => `${v.id === cur?.id ? '✅' : '▫️'} <b>${esc(v.name)}</b> · ${SOURCE[v.source] ?? v.source}\n     <code>${v.id}</code>`);
+  if (cur?.source === 'env') lines.push(`✅ <b>Голос из .env</b>\n     <code>${cur.id}</code>`);
+  const text = '🗣 <b>Голоса для озвучки</b>\n\n' + (lines.length ? lines.join('\n') : 'Пока ни одного. Склонируйте свой или добавьте голос ElevenLabs по ID.') +
+    '\n\nАктивный голос (✅) озвучивает ролики по умолчанию. Для отдельного ролика голос можно выбрать перед озвучкой.';
+  const kb = new InlineKeyboard();
+  for (const v of reg.voices) {
+    kb.text(`${v.id === cur?.id ? '✅ ' : ''}${v.name}`.slice(0, 40), `vsel:${v.id}`).text('🗑', `vdel:${v.id}`).row();
+  }
+  kb.text('➕ Голос ElevenLabs по ID', 'vadd').row().text('🧬 Клонировать мой голос', 'vclone');
+  return { text, kb };
+}
+async function showVoices(ctx, edit = false) {
+  if (!ttsKeySet()) return ctx.reply('Озвучка через ElevenLabs не настроена: впишите ELEVENLABS_API_KEY в .env на сервере и перезапустите бота.');
+  const { text, kb } = voicesView();
+  if (edit) return ctx.editMessageText(text, { ...HTML, reply_markup: kb }).catch(() => ctx.reply(text, { ...HTML, reply_markup: kb }));
+  return ctx.reply(text, { ...HTML, reply_markup: kb });
+}
+bot.command('voice', (ctx) => showVoices(ctx));
+bot.command('voices', (ctx) => showVoices(ctx));
+bot.hears('🗣 Голоса', (ctx) => showVoices(ctx));
+bot.callbackQuery(/^vsel:(.+)$/, async (ctx) => { await ctx.answerCallbackQuery(setActiveVoice(dataDir, ctx.match[1]) ? 'Голос выбран' : 'Нет такого голоса'); await showVoices(ctx, true); });
+bot.callbackQuery(/^vdel:(.+)$/, async (ctx) => { removeVoice(dataDir, ctx.match[1]); await ctx.answerCallbackQuery('Убран из списка бота (в ElevenLabs остался)'); await showVoices(ctx, true); });
+bot.callbackQuery('vclone', async (ctx) => { await ctx.answerCallbackQuery(); await startClone(ctx); });
+bot.callbackQuery('vadd', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  state.set(ctx.chat.id, { mode: 'voiceid' });
+  await ctx.reply('📚 Пришлите ID голоса ElevenLabs или ссылку на него.\n\nГде взять: в ElevenLabs откройте голос (раздел «Голоса» / Voice Library) → «ID» или «Copy voice ID». Голос из общей библиотеки сначала добавьте к себе («Add to my voices»), иначе API его не отдаст.', { reply_markup: new InlineKeyboard().text('❌ Отмена', 'cancel') });
 });
+async function acceptVoiceId(ctx, text) {
+  const msg = await ctx.reply('🔎 Проверяю голос в ElevenLabs…');
+  try {
+    const v = await addLibraryVoice(text);
+    state.delete(ctx.chat.id);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос «${v.name}» добавлен и выбран активным. Сменить: «🗣 Голоса».`);
+    if (v.preview?.error) await ctx.reply(`Пробная фраза не озвучилась: ${v.preview.error}`);
+    else if (v.preview) await ctx.replyWithVoice(new InputFile(v.preview), { caption: `Пробная фраза голосом «${v.name}»` });
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `⚠️ ${e.message.slice(0, 600)}\n\nПришлите другой ID или нажмите «🗣 Голоса».`);
+  }
+}
 
 async function acceptClone(ctx, fileId, ext) {
   const msg = await ctx.reply('🧬 Загружаю запись в ElevenLabs и создаю клон…');
@@ -67,7 +105,7 @@ async function acceptClone(ctx, fileId, ext) {
     const r = await cloneFromRecording(raw);
     state.delete(ctx.chat.id);
     const short = r.seconds < CLONE_GOOD_SECONDS ? `\n⚠️ Запись ${Math.round(r.seconds)} с: для лучшего сходства лучше 1–2 минуты. Можно переклонировать позже.` : '';
-    const old = r.previous ? `\nСтарый клон остался в вашем аккаунте ElevenLabs: если голосов-слотов не хватает, удалите его там вручную.` : '';
+    const old = r.previous ? `\nПрежний клон «${r.previous.name}» остался в списке «🗣 Голоса» и в аккаунте ElevenLabs.` : '';
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос склонирован и подключён (ID ${r.voiceId}).${short}${old}\n\nТеперь после загрузки сценария будет кнопка «🤖 Озвучить моим голосом».`);
     if (r.preview?.error) await ctx.reply(`Пробная фраза не озвучилась: ${r.preview.error}`);
     else if (r.preview) await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Пробная фраза новым голосом' });
@@ -97,7 +135,7 @@ async function showJob(ctx, job) {
     await ctx.replyWithVideo(new InputFile(job.video), { caption: job.title, supports_streaming: true });
     kb.text('🎙 Перезаписать озвучку', `voice:${job.id}`).row().text('🖥 Full HD (1080p)', `render:${job.id}:fhd`);
   } else {
-    if (ttsConfigured(dataDir)) kb.text('🤖 Озвучить моим голосом', `tts:${job.id}`).row();
+    if (ttsConfigured(dataDir)) addTtsButtons(kb, job.id);
     kb.text('🎙 Записать озвучку', `voice:${job.id}`).row().text('🧪 Черновик без голоса', `draft:${job.id}`);
     if (job.status === 'failed' || job.status === 'interrupted') kb.row().text('🔁 Повторить', `render:${job.id}:${QUALITY}`);
   }
@@ -110,16 +148,32 @@ bot.callbackQuery(/^voice:(.+)$/, async (ctx) => {
   state.set(ctx.chat.id, { mode: 'voice', jobId: ctx.match[1] });
   await ctx.reply(VOICE_INSTRUCTION, HTML);
 });
-async function runTts(ctx, jobId, fresh) {
+function addTtsButtons(kb, jobId, withChars = false) {
+  const cur = currentVoice(dataDir);
+  kb.text(`🤖 Озвучить: ${cur.name}`.slice(0, 40) + (withChars ? ` (${ttsChars(jobId)} симв.)` : ''), `tts:${jobId}`).row();
+  if (loadVoices(dataDir).voices.length > 1) kb.text('🗣 Озвучить другим голосом', `ttsc:${jobId}`).row();
+  return kb;
+}
+bot.callbackQuery(/^ttsc:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const kb = new InlineKeyboard();
+  for (const v of loadVoices(dataDir).voices) kb.text(`${SOURCE[v.source]?.split(' ')[0] ?? ''} ${v.name}`.slice(0, 40), `ttsv:${ctx.match[1]}:${v.id}`).row();
+  await ctx.reply('Каким голосом озвучить этот ролик? (Активный голос не меняется.)', { reply_markup: kb });
+});
+bot.callbackQuery(/^ttsv:([^:]+):(.+)$/, async (ctx) => { await ctx.answerCallbackQuery(); await runTts(ctx, ctx.match[1], false, ctx.match[2]); });
+
+async function runTts(ctx, jobId, fresh, voiceId) {
   const job = getJob(jobId);
   if (!job) return ctx.reply('Не нашёл этот ролик.');
   if (['queued', 'rendering'].includes(job.status)) return ctx.reply('Этот ролик уже в очереди или рендерится.');
-  const msg = await ctx.reply('🤖 Озвучиваю вашим голосом…');
+  // «другой дубль» повторяет тем же голосом, что и прошлая озвучка этого ролика
+  const vid = voiceId ?? (fresh ? job.voice?.voiceId : undefined) ?? currentVoice(dataDir)?.id;
+  const msg = await ctx.reply('🤖 Озвучиваю…');
   try {
-    const r = await prepareTts(jobId, { fresh });
+    const r = await prepareTts(jobId, { fresh, voiceId: vid });
     const { total } = layoutPhrases(r.durations);
     const spent = r.chars ? `списано ${r.chars} симв.` : 'взято из кэша, символы не тратились';
-    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Озвучено: ${r.durations.length} фраз, ролик ~${Math.round(total)} с (${spent}${r.fromCache && r.chars ? `, ${r.fromCache} фраз из кэша` : ''}).`);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Озвучено голосом «${r.voiceName}»: ${r.durations.length} фраз, ролик ~${Math.round(total)} с (${spent}${r.fromCache && r.chars ? `, ${r.fromCache} фраз из кэша` : ''}).`);
     const kb = new InlineKeyboard().text('✅ Всё хорошо, делать видео', `ok:${jobId}`).row()
       .text('🔁 Другой дубль (спишет символы)', `ttsnew:${jobId}`).row().text('🎙 Записать самому', `voice:${jobId}`);
     await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так прозвучит озвучка в ролике. Всё устраивает?', reply_markup: kb });
@@ -194,7 +248,7 @@ async function acceptScenario(ctx, text) {
   const job = createJob(scenario, ctx.chat.id);
   state.set(ctx.chat.id, { mode: 'voice', jobId: job.id });
   const kb = new InlineKeyboard();
-  if (ttsConfigured(dataDir)) kb.text(`🤖 Озвучить моим голосом (${ttsChars(job.id)} симв.)`, `tts:${job.id}`).row();
+  if (ttsConfigured(dataDir)) addTtsButtons(kb, job.id, true);
   kb.text('🧪 Черновик без голоса', `draft:${job.id}`).text('❌ Отмена', 'cancel');
   await ctx.reply(describeScenario(scenario), HTML);
   await ctx.reply(VOICE_INSTRUCTION, { ...HTML, reply_markup: kb });
@@ -213,7 +267,7 @@ async function acceptVoice(ctx, fileId, ext) {
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Голос обработан: ${r.durations.length} фраз, ролик получится ~${Math.round(total)} с.`);
     // рендер НЕ запускаем: сначала вы слушаете очищенную запись и подтверждаете или перезаписываете
     const kb = new InlineKeyboard().text('✅ Всё хорошо, делать видео', `ok:${st.jobId}`).row().text('🎙 Перезаписать', `voice:${st.jobId}`);
-    if (ttsConfigured(dataDir)) kb.row().text('🤖 Озвучить моим голосом', `tts:${st.jobId}`);
+    if (ttsConfigured(dataDir)) addTtsButtons(kb.row(), st.jobId);
     await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Так прозвучит озвучка в ролике. Всё устраивает? Можно и просто прислать новую запись: она заменит эту.', reply_markup: kb });
     state.set(ctx.chat.id, { mode: 'voice', jobId: st.jobId });
   } catch (e) {
@@ -245,6 +299,7 @@ bot.on('message:document', async (ctx) => {
 });
 bot.on('message:text', (ctx) => {
   const st = state.get(ctx.chat.id);
+  if (st?.mode === 'voiceid') return acceptVoiceId(ctx, ctx.message.text);
   if (st?.mode === 'scenario' || ctx.message.text.trim().startsWith('{') || ctx.message.text.trim().startsWith('```')) return acceptScenario(ctx, ctx.message.text);
   return ctx.reply('Нажмите «🎬 Создать видео».', { reply_markup: menu });
 });

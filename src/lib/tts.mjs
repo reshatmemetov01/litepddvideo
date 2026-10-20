@@ -8,12 +8,81 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_ROOT = process.env.ELEVENLABS_API_ROOT ?? 'https://api.elevenlabs.io';
 
-// ID голоса: клон, созданный ботом командой /clone (data/voice.json), иначе ELEVENLABS_VOICE_ID из .env
-const voiceFile = (dataDir) => path.join(dataDir, 'voice.json');
-export function savedVoice(dataDir) { try { return JSON.parse(fs.readFileSync(voiceFile(dataDir), 'utf8')); } catch { return null; } }
-export const currentVoiceId = (dataDir) => savedVoice(dataDir)?.voiceId ?? process.env.ELEVENLABS_VOICE_ID ?? null;
+// ---- голоса ----
+// data/voices.json: { active, voices: [{ id, name, source: 'clone' | 'library', addedAt }] }
+// Активный голос используется по умолчанию; если список пуст — ELEVENLABS_VOICE_ID из .env.
+const voicesFile = (dataDir) => path.join(dataDir, 'voices.json');
+const legacyFile = (dataDir) => path.join(dataDir, 'voice.json');
+
+export function loadVoices(dataDir) {
+  try { return JSON.parse(fs.readFileSync(voicesFile(dataDir), 'utf8')); } catch { /* ещё нет */ }
+  // перенос со старого формата (один клон в voice.json)
+  try {
+    const old = JSON.parse(fs.readFileSync(legacyFile(dataDir), 'utf8'));
+    const reg = { active: old.voiceId, voices: [{ id: old.voiceId, name: old.name ?? 'Мой голос', source: 'clone', addedAt: old.createdAt ?? Date.now() }] };
+    saveVoices(dataDir, reg);
+    fs.rmSync(legacyFile(dataDir), { force: true });
+    return reg;
+  } catch { return { active: null, voices: [] }; }
+}
+function saveVoices(dataDir, reg) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(voicesFile(dataDir), JSON.stringify(reg, null, 1));
+}
+export function addVoice(dataDir, voice, { makeActive = true } = {}) {
+  const reg = loadVoices(dataDir);
+  reg.voices = reg.voices.filter((v) => v.id !== voice.id);
+  reg.voices.push({ ...voice, addedAt: Date.now() });
+  if (makeActive || !reg.active) reg.active = voice.id;
+  saveVoices(dataDir, reg);
+  return reg;
+}
+export function setActiveVoice(dataDir, id) {
+  const reg = loadVoices(dataDir);
+  if (!reg.voices.some((v) => v.id === id)) return false;
+  reg.active = id;
+  saveVoices(dataDir, reg);
+  return true;
+}
+/** Убирает голос из списка бота (в ElevenLabs он остаётся). */
+export function removeVoice(dataDir, id) {
+  const reg = loadVoices(dataDir);
+  reg.voices = reg.voices.filter((v) => v.id !== id);
+  if (reg.active === id) reg.active = reg.voices.at(-1)?.id ?? null;
+  saveVoices(dataDir, reg);
+  return reg;
+}
+export function currentVoice(dataDir) {
+  const reg = loadVoices(dataDir);
+  const v = reg.voices.find((x) => x.id === reg.active);
+  if (v) return v;
+  return process.env.ELEVENLABS_VOICE_ID ? { id: process.env.ELEVENLABS_VOICE_ID, name: 'Голос из .env', source: 'env' } : null;
+}
+export const voiceName = (dataDir, id) => loadVoices(dataDir).voices.find((v) => v.id === id)?.name ?? (id === process.env.ELEVENLABS_VOICE_ID ? 'Голос из .env' : id);
+export const currentVoiceId = (dataDir) => currentVoice(dataDir)?.id ?? null;
 export const ttsKeySet = () => !!process.env.ELEVENLABS_API_KEY;
 export const ttsConfigured = (dataDir) => ttsKeySet() && !!currentVoiceId(dataDir);
+
+/** ID голоса из текста: сам ID или ссылка из ElevenLabs (…voiceId=XXXX или …/voices/XXXX). */
+export function parseVoiceId(text) {
+  const t = text.trim();
+  const fromUrl = t.match(/[?&](?:voiceId|voice_id)=([A-Za-z0-9]{10,40})/) ?? t.match(/\/voices?\/([A-Za-z0-9]{10,40})(?:[/?#]|$)/);
+  if (fromUrl) return fromUrl[1];
+  return /^[A-Za-z0-9]{10,40}$/.test(t) ? t : null;
+}
+
+/** Проверяет, что голос доступен этому ключу, и возвращает его название. */
+export async function fetchVoiceInfo(id) {
+  const res = await fetch(`${API_ROOT}/v1/voices/${encodeURIComponent(id)}`, { headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY } });
+  const body = await res.text();
+  if (res.status === 401) throw new TtsError(explain(401, body));
+  if (res.status === 400 || res.status === 404) {
+    throw new TtsError('Голос с таким ID недоступен вашему аккаунту. Если это голос из библиотеки ElevenLabs (Voice Library), сначала добавьте его к себе («Add to my voices» / «Добавить в мои голоса»), потом пришлите ID ещё раз.');
+  }
+  if (!res.ok) throw new TtsError(explain(res.status, body));
+  const j = JSON.parse(body);
+  return { id: j.voice_id ?? id, name: j.name ?? id, category: j.category };
+}
 
 export function voiceSettings() {
   const n = (k, d) => (process.env[k] !== undefined ? +process.env[k] : d);
@@ -74,8 +143,8 @@ async function callTts(text, key, voiceId) {
  * Озвучивает фразы по одной. Одинаковый текст с теми же настройками берётся из кэша и символы не тратит.
  * @returns {{files: string[], chars: number, fromCache: number}} chars — сколько символов реально списано
  */
-export async function synthesizePhrases(texts, { dataDir, fresh = false }) {
-  const key = process.env.ELEVENLABS_API_KEY, voiceId = currentVoiceId(dataDir);
+export async function synthesizePhrases(texts, { dataDir, fresh = false, voiceId = currentVoiceId(dataDir) }) {
+  const key = process.env.ELEVENLABS_API_KEY;
   if (!key) throw new TtsError('Не задан ELEVENLABS_API_KEY в .env');
   if (!voiceId) throw new TtsError('Голос не выбран: склонируйте его командой /clone');
   const cacheDir = path.join(dataDir, 'tts-cache');
@@ -125,8 +194,7 @@ export async function cloneVoice(audioFile, { dataDir, name }) {
     throw new TtsError(explain(res.status, body));
   }
   const voiceId = JSON.parse(body).voice_id;
-  const previous = savedVoice(dataDir);
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(voiceFile(dataDir), JSON.stringify({ voiceId, name, createdAt: Date.now() }, null, 1));
+  const previous = loadVoices(dataDir).voices.find((v) => v.source === 'clone') ?? null;
+  addVoice(dataDir, { id: voiceId, name, source: 'clone' });
   return { voiceId, previous };
 }
