@@ -270,7 +270,7 @@ async function startRender(ctx, jobId, quality, withVoice) {
   let lastEdit = 0;
   try { enqueueRender(jobId, {
     quality, withVoice,
-    onStart: () => ctx.api.editMessageText(ctx.chat.id, progressMsg.message_id, '⚙️ Рендерю видео…').catch(() => {}),
+    onStart: () => ctx.api.editMessageText(ctx.chat.id, progressMsg.message_id, '⚙️ Загружаю сцену и модели… Проценты появятся после первых кадров.').catch(() => {}),
     onProgress: ({ frame, total, seconds }) => {
       if (Date.now() - lastEdit < 15000) return;
       lastEdit = Date.now();

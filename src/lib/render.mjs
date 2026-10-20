@@ -123,7 +123,7 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
         const buf = ready.get(written); ready.delete(written);
         if (!ff.stdin.write(buf)) await new Promise((r) => ff.stdin.once('drain', r));
         written++;
-        if (written % 15 === 0 || written === total) onProgress?.({ frame: written, total, seconds: (Date.now() - t0) / 1000 });
+        onProgress?.({ frame: written, total, seconds: (Date.now() - t0) / 1000 });
       }
     };
     await Promise.all(pages.map(async (page) => {
