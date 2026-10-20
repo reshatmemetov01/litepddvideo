@@ -1,0 +1,6 @@
+{
+  "_comment": "Свои 3D-модели (glTF/GLB). В сценарии: \"model\": \"имя\". length — длина в метрах; forward — куда смотрит нос модели (+x, -x, +z, -z), если не задано — определяется по колёсам front/back. wheels — шаблон имён узлов-колёс (по умолчанию wheel|tire|tyre). lights — шаблон имён материалов стоп-сигналов.",
+  "kenney_sedan": { "file": "kenney/sedan.glb", "length": 4.5, "license": "CC0, Kenney Car Kit" },
+  "kenney_police": { "file": "kenney/police.glb", "length": 4.7, "license": "CC0, Kenney Car Kit" },
+  "kenney_ambulance": { "file": "kenney/ambulance.glb", "length": 5.6, "license": "CC0, Kenney Car Kit" }
+}

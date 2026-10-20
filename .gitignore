@@ -5,3 +5,4 @@ data/
 *.silent.mp4
 assets/rnnoise.rnnn
 ready/
+assets/ext/

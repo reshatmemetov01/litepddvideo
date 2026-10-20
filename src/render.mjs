@@ -1,5 +1,5 @@
 // CLI: node src/render.mjs scenarios/q01.json [--preview|--hd|--fhd] [--voice запись.m4a | --audio трек.wav]
-//                                   [--frames 1,10,20] [--workers 3] [--seconds 5]
+//                                   [--frames 1,10,20] [--workers 3] [--seconds 5] [--range 15-25]
 // --preview 540x960 · --hd 720x1280 (по умолчанию) · --fhd 1080x1920
 // --voice   сырая запись голоса: очищается, режется на фразы, видео подгоняется под неё
 // --music файл.mp3 | --no-music   фоновая музыка (по умолчанию assets/music/default.mp3)
@@ -35,6 +35,7 @@ const res = await renderScenario({
   workers: val('workers') ? +val('workers') : undefined,
   onlyFrames: only ? only.split(',').map(Number) : undefined,
   limitFrames: val('seconds') ? Math.round(+val('seconds') * 30) : undefined,
+  range: val('range') ? val('range').split('-').map(Number) : undefined,
   onProgress: ({ frame, total, seconds }) => process.stdout.write(`\rкадр ${frame}/${total} (${seconds.toFixed(0)} c)`),
 });
 console.log('\nготово:', res.out ?? 'кадры в out/', `· длительность ${res.duration.toFixed(1)} c`);

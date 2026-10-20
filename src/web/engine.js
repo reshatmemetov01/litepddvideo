@@ -2,10 +2,17 @@
 // Всё детерминировано: renderAt(t) не зависит от реального времени, поэтому кадры можно
 // снимать по одному (render.mjs) и собирать в видео.
 import * as THREE from 'three';
-
-const W = 8;          // ширина проезжей части (2 полосы по 4 м)
-const SIDEWALK = 4;   // ширина тротуара
-const FAR = 70;       // длина дорог от центра
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { loadSky, allLoaded, setMaxAnisotropy, loadGltf } from './world/assets.js';
+import { buildCity, groundY } from './world/city.js';
+import { makeSign, makeTrafficLight } from './world/props.js';
+import { makeVehicle, makeVehicleFromModel, animateVehicle } from './world/vehicles.js';
+import { makePedestrian, makePedestrianFromModel, animatePedestrian, animateModelPedestrian } from './world/people.js';
 
 // ---------- утилиты ----------
 const col = (c) => (typeof c === 'string' ? Number(c) : c);
@@ -18,283 +25,8 @@ const lerpAngle = (a, b, u) => {
   return a + d * u;
 };
 
-function mat(color, opts = {}) {
-  return new THREE.MeshLambertMaterial({ color, ...opts });
-}
-function box(w, h, d, color, x = 0, y = 0, z = 0) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
-  m.position.set(x, y, z);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  return m;
-}
-
-// ---------- мир ----------
-function buildGround(scene, roads, hasCrosswalks = false) {
-  const grass = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mat(0x6cc04a));
-  grass.rotation.x = -Math.PI / 2;
-  grass.receiveShadow = true;
-  scene.add(grass);
-
-  const hasX = roads.includes('x');
-  const hasZ = roads.includes('z');
-  const asphalt = 0x4a4d55;
-  const curb = 0xc4a08a;
-
-  const addRoad = (alongX) => {
-    const g = new THREE.Group();
-    const road = box(FAR * 2, 0.1, W, asphalt, 0, 0.05, 0);
-    g.add(road);
-    // тротуары
-    for (const s of [-1, 1]) {
-      g.add(box(FAR * 2, 0.25, SIDEWALK, curb, 0, 0.125, s * (W / 2 + SIDEWALK / 2)));
-    }
-    // осевая — пунктир
-    for (let i = -FAR; i < FAR; i += 6) {
-      g.add(box(3, 0.02, 0.2, 0xf4f4f4, i + 1.5, 0.11, 0));
-    }
-    if (!alongX) g.rotation.y = Math.PI / 2;
-    scene.add(g);
-  };
-  if (hasX) addRoad(true);
-  if (hasZ) addRoad(false);
-
-  // центр перекрёстка закрываем чистым асфальтом, чтобы не торчали тротуары/разметка
-  if (hasX && hasZ) {
-    scene.add(box(W, 0.3, W, asphalt, 0, 0.15, 0));
-    // стоп-линии
-    const so = hasCrosswalks ? 9.6 : W / 2 + 0.6;
-    for (const [x, z, rot] of [[2, so, 0], [-2, -so, 0], [so, -2, 1], [-so, 2, 1]]) {
-      const l = box(4, 0.02, 0.4, 0xf4f4f4, x, 0.32, z);
-      if (rot) l.rotation.y = Math.PI / 2, l.position.set(x, 0.32, z);
-      scene.add(l);
-    }
-  }
-}
-
-function addCrosswalk(scene, c) {
-  // число — зебра через дорогу вдоль z на этой координате z; объект {road, at}: через дорогу 'x' или 'z'
-  const { road, at } = typeof c === 'number' ? { road: 'z', at: c } : c;
-  for (let i = -3; i <= 3; i++) {
-    if (road === 'z') scene.add(box(0.65, 0.03, 4, 0xf4f4f4, i * 1.15, 0.12, at));
-    else scene.add(box(4, 0.03, 0.65, 0xf4f4f4, at, 0.12, i * 1.15));
-  }
-}
-
-function windowsTexture(base, rows, cols) {
-  const c = document.createElement('canvas');
-  c.width = 128; c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = base; g.fillRect(0, 0, 128, 256);
-  const ww = 128 / cols, hh = 256 / rows;
-  for (let r = 0; r < rows; r++) {
-    for (let k = 0; k < cols; k++) {
-      g.fillStyle = Math.random() > 0.15 ? '#7ab6e0' : '#f6d98a';
-      g.fillRect(k * ww + ww * 0.2, r * hh + hh * 0.2, ww * 0.6, hh * 0.55);
-    }
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-let seed = 7;
-const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-
-function addBuilding(scene, x, z, w, d, h) {
-  const palette = ['#e9d9a8', '#d9c48f', '#cfd6dc', '#e0b9a0'];
-  const base = palette[Math.floor(rnd() * palette.length)];
-  const tex = windowsTexture(base, Math.max(2, Math.round(h / 3.2)), Math.max(2, Math.round(w / 3)));
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(0xffffff, { map: tex }));
-  m.position.set(x, h / 2, z);
-  m.castShadow = true; m.receiveShadow = true;
-  scene.add(m);
-  scene.add(box(w + 0.6, 0.5, d + 0.6, 0x8c6a5a, x, h + 0.25, z));
-}
-
-function addTree(scene, x, z, s = 1) {
-  const g = new THREE.Group();
-  g.add(box(0.5 * s, 2 * s, 0.5 * s, 0x7a5230, 0, 1 * s, 0));
-  const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.9 * s, 0), mat(0x3f9e3a));
-  crown.position.y = 3.6 * s; crown.castShadow = true;
-  g.add(crown);
-  const crown2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.3 * s, 0), mat(0x58b84a));
-  crown2.position.set(0.8 * s, 4.7 * s, 0.3 * s); crown2.castShadow = true;
-  g.add(crown2);
-  g.position.set(x, 0.25, z);
-  scene.add(g);
-}
-
-function buildScenery(scene, roads) {
-  const hasX = roads.includes('x'), hasZ = roads.includes('z');
-  const off = W / 2 + SIDEWALK + 2;
-  if (hasX && hasZ) {
-    // четыре квартала по углам
-    for (const sx of [-1, 1]) {
-      for (const sz of [-1, 1]) {
-        const cx = sx * (off + 12), cz = sz * (off + 12);
-        addBuilding(scene, cx, cz, 14, 14, 9 + rnd() * 9);
-        addBuilding(scene, cx + sx * 20, cz, 14, 14, 8 + rnd() * 8);
-        addBuilding(scene, cx, cz + sz * 20, 14, 14, 8 + rnd() * 8);
-        addTree(scene, sx * (W / 2 + 2.2), sz * (W / 2 + 26), 1);
-        addTree(scene, sx * (W / 2 + 26), sz * (W / 2 + 2.2), 1);
-      }
-    }
-  } else if (hasZ) {
-    for (const sx of [-1, 1]) {
-      for (let z = -60; z <= 60; z += 20) {
-        addBuilding(scene, sx * (off + 9), z, 14, 16, 8 + rnd() * 10);
-        if (sx < 0 || Math.abs(z) > 30) addTree(scene, sx * (W / 2 + 2.2), z + 8, 1);
-        if (sx < 0) addTree(scene, sx * (W / 2 + 2.2), z - 4, 0.9);
-      }
-    }
-  } else {
-    for (const sz of [-1, 1]) {
-      for (let x = -60; x <= 60; x += 20) {
-        addBuilding(scene, x, sz * (off + 9), 16, 14, 8 + rnd() * 10);
-        addTree(scene, x + 8, sz * (W / 2 + 2.2), 1);
-      }
-    }
-  }
-}
-
-// ---------- знаки ----------
-function signTexture(kind) {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.clearRect(0, 0, 256, 256);
-  const poly = (pts, fill, stroke, lw) => {
-    g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath();
-    if (fill) { g.fillStyle = fill; g.fill(); }
-    if (stroke) { g.lineWidth = lw; g.strokeStyle = stroke; g.lineJoin = 'round'; g.stroke(); }
-  };
-  if (kind === 'main_road') {            // 2.1 Главная дорога
-    poly([[128, 8], [248, 128], [128, 248], [8, 128]], '#fff', '#111', 10);
-    poly([[128, 36], [220, 128], [128, 220], [36, 128]], '#f6c500', null, 0);
-    poly([[128, 36], [220, 128], [128, 220], [36, 128]], null, '#111', 8);
-  } else if (kind === 'yield') {         // 2.4 Уступите дорогу
-    poly([[16, 36], [240, 36], [128, 230]], '#fff', '#d32020', 26);
-    poly([[16, 36], [240, 36], [128, 230]], '#fff', null, 0);
-  } else if (kind === 'stop') {          // 2.5 Движение без остановки запрещено
-    const pts = [];
-    for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + (i * Math.PI) / 4; pts.push([128 + 118 * Math.cos(a), 128 + 118 * Math.sin(a)]); }
-    poly(pts, '#d32020', '#fff', 8);
-    g.fillStyle = '#fff'; g.font = 'bold 62px Montserrat, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText('STOP', 128, 132);
-  } else if (kind === 'ped_crossing') {  // 5.19.1 Пешеходный переход
-    g.fillStyle = '#1b57c4'; g.beginPath(); g.roundRect(16, 16, 224, 224, 22); g.fill();
-    g.strokeStyle = '#fff'; g.lineWidth = 8; g.beginPath(); g.roundRect(22, 22, 212, 212, 18); g.stroke();
-    poly([[128, 44], [208, 196], [48, 196]], '#fff', '#111', 8);
-    poly([[128, 68], [188, 184], [68, 184]], '#f6c500', null, 0);
-    g.fillStyle = '#111';
-    g.beginPath(); g.arc(130, 106, 11, 0, 7); g.fill();
-    g.fillRect(122, 120, 16, 34);
-    g.save(); g.translate(130, 154); g.rotate(0.35); g.fillRect(-14, 0, 12, 30); g.rotate(-0.7); g.fillRect(2, 0, 12, 30); g.restore();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-function makeSign(def) {
-  const g = new THREE.Group();
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 3, 8), mat(0x999999));
-  pole.position.y = 1.5; pole.castShadow = true;
-  g.add(pole);
-  const face = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.5, 1.5),
-    new THREE.MeshBasicMaterial({ map: signTexture(def.type), transparent: true, side: THREE.DoubleSide, alphaTest: 0.1 })
-  );
-  face.position.set(0, 3.0, 0);
-  g.add(face);
-  g.position.set(def.pos[0], 0.25, def.pos[1]);
-  g.rotation.y = ((def.rot ?? 0) * Math.PI) / 180;  // 0 = знак смотрит на +z (на зрителя снизу)
-  g.scale.setScalar(1.6);
-  return g;
-}
-
-// ---------- светофор ----------
-function makeTrafficLight(def) {
-  const g = new THREE.Group();
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 4.2, 8), mat(0x555555));
-  pole.position.y = 2.1; pole.castShadow = true; g.add(pole);
-  g.add(box(0.6, 1.7, 0.5, 0x1d1f24, 0, 4.5, 0));
-  const lamps = { red: 0xff2a20, yellow: 0xffc400, green: 0x2cff5a };
-  Object.entries({ red: 5.05, yellow: 4.5, green: 3.95 }).forEach(([k, y]) => {
-    const lit = (def.state ?? 'red') === k;
-    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 10), new THREE.MeshBasicMaterial({ color: lit ? lamps[k] : 0x2a2a2a }));
-    lamp.position.set(0, y, 0.27);
-    g.add(lamp);
-    if (lit) {
-      const glow = new THREE.Mesh(new THREE.SphereGeometry(0.34, 14, 10), new THREE.MeshBasicMaterial({ color: lamps[k], transparent: true, opacity: 0.3 }));
-      glow.position.copy(lamp.position); g.add(glow);
-    }
-  });
-  g.position.set(def.pos[0], 0.25, def.pos[1]);
-  g.rotation.y = ((def.rot ?? 0) * Math.PI) / 180;
-  g.scale.setScalar(1.3);
-  return g;
-}
-
-// ---------- транспорт ----------
-const CAR_COLORS = { blue: 0x3b4cc0, red: 0xd2352f, white: 0xeeeeee, black: 0x222428, yellow: 0xf0b400, green: 0x2f9e5b, grey: 0x8a8f98 };
-
-function makeVehicle(def) {
-  const g = new THREE.Group();   // вперёд = +x
-  const color = CAR_COLORS[def.color] ?? col(def.color) ?? 0x3b4cc0;
-  const glass = 0x9cc8e6;
-  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.35, 14);
-  const wheel = (x, z) => {
-    const w = new THREE.Mesh(wheelGeo, mat(0x15161a));
-    w.rotation.x = Math.PI / 2; w.position.set(x, 0.42, z); w.castShadow = true; g.add(w);
-  };
-  if (def.type === 'bus') {
-    g.add(box(10, 2.6, 2.6, 0x2f6fbf, 0, 1.75, 0));
-    g.add(box(10.05, 1.0, 2.62, glass, 0, 2.3, 0));
-    g.add(box(10.05, 0.5, 2.64, 0xf2f2f2, 0, 1.15, 0));
-    [-3.4, 3.4].forEach((x) => [-1.2, 1.2].forEach((z) => wheel(x, z)));
-    g.add(box(0.1, 0.8, 1.8, 0xfff2b0, 5.02, 1.0, 0));
-  } else if (def.type === 'truck') {
-    g.add(box(2.4, 2.4, 2.4, color, 3.8, 1.7, 0));
-    g.add(box(0.1, 1.0, 2.1, glass, 5.02, 2.2, 0));
-    g.add(box(6.6, 3.0, 2.6, 0xe6e6e6, -0.6, 2.0, 0));
-    [-3, 0.2, 4.2].forEach((x) => [-1.15, 1.15].forEach((z) => wheel(x, z)));
-  } else {
-    g.add(box(4.4, 0.9, 1.9, color, 0, 0.9, 0));
-    g.add(box(2.3, 0.85, 1.7, glass, -0.2, 1.7, 0));
-    g.add(box(1.4, 0.06, 1.72, color, -0.2, 2.15, 0));
-    [-1.4, 1.4].forEach((x) => [-0.85, 0.85].forEach((z) => wheel(x, z)));
-    g.add(box(0.1, 0.25, 0.4, 0xfff2b0, 2.22, 1.0, 0.6));
-    g.add(box(0.1, 0.25, 0.4, 0xfff2b0, 2.22, 1.0, -0.6));
-    // поворотники: вперёд +x, левый борт = -z
-    g.userData.blink = { left: [], right: [] };
-    for (const [side, z] of [['left', -0.9], ['right', 0.9]]) {
-      for (const x of [2.2, -2.2]) {
-        const b = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.26, 0.34), new THREE.MeshBasicMaterial({ color: 0xff9a00 }));
-        b.position.set(x, 0.95, z); b.visible = false; g.add(b);
-        g.userData.blink[side].push(b);
-      }
-    }
-  }
-  return g;
-}
-
-function makePedestrian(def) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 1.1, 10), mat(col(def.color) ?? 0xe8602c));
-  body.position.y = 1.15; body.castShadow = true; g.add(body);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 10), mat(0xf2c9a0));
-  head.position.y = 1.95; head.castShadow = true; g.add(head);
-  const l1 = box(0.22, 0.7, 0.22, 0x2a3a6a, 0, 0.35, 0.12);
-  const l2 = box(0.22, 0.7, 0.22, 0x2a3a6a, 0, 0.35, -0.12);
-  g.add(l1, l2);
-  g.userData.legs = [l1, l2];
-  g.scale.setScalar(1.6);
-  return g;
-}
-
 // ---------- траектории ----------
+// Таблица с шагом 1/60 с: позиция, курс, пройденный путь, скорость, ускорение, скорость поворота.
 function makePath(points, defaultHeading = 0) {
   const pts = points.map((p) => ({ t: p.t, x: p.x, z: p.z, ctrl: p.ctrl, ease: p.ease !== false }));
   const at = (t) => {
@@ -308,93 +40,113 @@ function makePath(points, defaultHeading = 0) {
     if (b.ease) u = smooth(u);
     if (b.ctrl) {
       const v = 1 - u;
-      return {
-        x: v * v * a.x + 2 * v * u * b.ctrl[0] + u * u * b.x,
-        z: v * v * a.z + 2 * v * u * b.ctrl[1] + u * u * b.z,
-      };
+      return { x: v * v * a.x + 2 * v * u * b.ctrl[0] + u * u * b.x, z: v * v * a.z + 2 * v * u * b.ctrl[1] + u * u * b.z };
     }
     return { x: lerp(a.x, b.x, u), z: lerp(a.z, b.z, u) };
   };
-  // таблица курса: считаем по ходу движения, при остановке держим последний
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t, step = 1 / 60;
-  const table = [];
-  let heading = null;
-  for (let t = t0; t <= t1 + 0.5; t += step) {
+  const head = [], dist = [], speed = [];
+  let heading = null, d = 0, prev = at(t0);
+  for (let t = t0; t <= t1 + 1; t += step) {
     const p = at(t), q = at(t + 0.05);
     const dx = q.x - p.x, dz = q.z - p.z;
     if (dx * dx + dz * dz > 1e-7) {
       const h = Math.atan2(-dz, dx);
       heading = heading === null ? h : lerpAngle(heading, h, 0.12);
     }
-    table.push(heading);
+    d += Math.hypot(p.x - prev.x, p.z - prev.z);
+    prev = p;
+    head.push(heading); dist.push(d);
   }
-  // пока объект стоит до начала движения — смотрит туда, куда потом поедет (или заданный heading)
-  const first = table.find((h) => h !== null);
-  for (let i = 0; i < table.length && table[i] === null; i++) table[i] = first ?? defaultHeading;
-  if (!table.length) table.push(defaultHeading);
-  const headingAt = (t) => table[clamp(Math.round((t - t0) / step), 0, table.length - 1)];
-  const speedAt = (t) => {
-    const p = at(t), q = at(t + 0.1);
-    return Math.hypot(q.x - p.x, q.z - p.z) / 0.1;
+  const first = head.find((h) => h !== null);
+  for (let i = 0; i < head.length && head[i] === null; i++) head[i] = first ?? defaultHeading;
+  if (!head.length) { head.push(defaultHeading); dist.push(0); }
+  for (let i = 0; i < dist.length; i++) speed.push(((dist[Math.min(i + 3, dist.length - 1)] - dist[Math.max(i - 3, 0)]) / (6 * step)));
+  const idx = (t) => clamp(Math.round((t - t0) / step), 0, head.length - 1);
+  return {
+    at,
+    headingAt: (t) => head[idx(t)],
+    kin: (t) => {
+      const i = idx(t), j = Math.min(i + 6, speed.length - 1), k = Math.max(i - 6, 0);
+      const dt = Math.max(1, j - k) * step;
+      let dh = head[j] - head[k];
+      dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+      return { dist: dist[i], speed: speed[i], accel: (speed[j] - speed[k]) / dt, yawRate: dh / dt };
+    },
   };
-  return { at, headingAt, speedAt };
 }
 
 // ---------- сцена ----------
-export async function createEngine(canvas, overlay, scenario, size) {
-  seed = 7;
+/**
+ * opts.ss — суперсэмплинг (рендер в ss раз больше и сжатие — гладкие края);
+ * opts.post — { bloom, ao, dof } постобработка (в черновике выключена ради скорости).
+ */
+export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   const { width, height } = size;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(1);
+  const ss = opts.ss ?? 1;
+  const post = { bloom: true, ao: false, dof: true, ...(opts.post ?? {}) };
+
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: ss < 2, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(ss);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = scenario.scene.exposure ?? 1.0;
+  renderer.info.autoReset = false;
+  setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xa9d8f2);
-  scene.fog = new THREE.Fog(0xa9d8f2, 90, 220);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8fbf7a, 0.95));
-  const sun = new THREE.DirectionalLight(0xfff3dd, 1.35);
-  sun.position.set(30, 60, 20);
+  scene.fog = new THREE.Fog(0xc4d2dc, 140, 420);
+  const sunDir = new THREE.Vector3(-0.55, 0.62, 0.42).normalize();   // утреннее солнце, тени ложатся наискосок
+  loadSky(renderer, scene, { intensity: 0.85, rotation: scenario.scene.skyRotation ?? 0 });
+  const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 200 });
-  sun.shadow.bias = -0.0005;
-  scene.add(sun);
+  sun.shadow.mapSize.set(4096, 4096);
+  const S = 46;
+  Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 400 });
+  sun.shadow.bias = -0.00025; sun.shadow.normalBias = 0.03; sun.shadow.radius = 3;
+  scene.add(sun, sun.target);
+  scene.add(new THREE.HemisphereLight(0xdfe8f2, 0x6d6b62, 0.25));
 
   const roads = scenario.scene.roads ?? ['x', 'z'];
-  buildGround(scene, roads, (scenario.scene.crosswalks ?? []).length > 0);
-  buildScenery(scene, roads);
-  (scenario.scene.crosswalks ?? []).forEach((c) => addCrosswalk(scene, c));
+  const city = await buildCity(scene, scenario);
   (scenario.scene.lights ?? []).forEach((l) => scene.add(makeTrafficLight(l)));
   (scenario.scene.signs ?? []).forEach((s) => scene.add(makeSign(s)));
 
-  // объекты
+  // объекты сценария
+  // свои модели: assets/models/models.json, в сценарии "model": "имя"
+  const registry = scenario.objects.some((o) => o.model) ? await (await fetch('/assets/models/models.json')).json() : {};
   const actors = {};
-  for (const o of scenario.objects) {
-    const mesh = o.type === 'pedestrian' ? makePedestrian(o) : makeVehicle(o);
+  for (const [i, o] of scenario.objects.entries()) {
+    let mesh;
+    if (o.model) {
+      const cfg = registry[o.model];
+      if (!cfg) throw new Error(`Модели «${o.model}» нет в assets/models/models.json`);
+      const gltf = await loadGltf(`/assets/models/${cfg.file}`);
+      mesh = o.type === 'pedestrian' ? makePedestrianFromModel(o, cfg, gltf) : makeVehicleFromModel(o, cfg, gltf);
+    } else mesh = o.type === 'pedestrian' ? makePedestrian(o, i) : makeVehicle(o);
     scene.add(mesh);
     actors[o.id] = { def: o, mesh, path: makePath(o.path, ((o.heading ?? 0) * Math.PI) / 180) };
   }
 
-  // подсветка-кольцо
-  const ringGeo = new THREE.RingGeometry(1.0, 1.25, 40);
+  // подсветка-кольцо и маршруты (поверх асфальта)
+  const ringGeo = new THREE.RingGeometry(1.0, 1.18, 64);
   const rings = (scenario.highlights ?? []).map((h) => {
-    const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: col(h.color) ?? 0xffd400, transparent: true, side: THREE.DoubleSide }));
+    const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: col(h.color) ?? 0xffd400, transparent: true, side: THREE.DoubleSide, depthWrite: false, toneMapped: false }));
     m.rotation.x = -Math.PI / 2;
+    m.renderOrder = 2;
     scene.add(m);
     return { h, m };
   });
-
-  // подсказки-маршруты (полупрозрачная лента по земле)
   const ribbons = (scenario.routes ?? []).map((r) => {
     const g = new THREE.Group();
     for (let i = 0; i < r.points.length - 1; i++) {
       const [x1, z1] = r.points[i], [x2, z2] = r.points[i + 1];
       const len = Math.hypot(x2 - x1, z2 - z1);
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, 1.0), new THREE.MeshBasicMaterial({ color: col(r.color) ?? 0x7cff6b, transparent: true, opacity: 0.8 }));
-      seg.position.set((x1 + x2) / 2, 0.36, (z1 + z2) / 2);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, 1.0), new THREE.MeshBasicMaterial({ color: col(r.color) ?? 0x7cff6b, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }));
+      seg.position.set((x1 + x2) / 2, 0.03, (z1 + z2) / 2);
       seg.rotation.y = Math.atan2(-(z2 - z1), x2 - x1);
       g.add(seg);
     }
@@ -402,8 +154,77 @@ export async function createEngine(canvas, overlay, scenario, size) {
     return { r, g };
   });
 
-  const camera = new THREE.PerspectiveCamera(50, width / height, 0.5, 400);
+  const camera = new THREE.PerspectiveCamera(40, width / height, 0.3, 900);
+
+  // постобработка
+  const composer = new EffectComposer(renderer);
+  composer.setPixelRatio(ss);
+  composer.setSize(width, height);
+  composer.addPass(new RenderPass(scene, camera));
+  if (post.ao) {
+    const ao = new GTAOPass(scene, camera, width * ss, height * ss);
+    ao.updateGtaoMaterial({ radius: 0.6, distanceExponent: 1.5, thickness: 1, scale: 1 });
+    composer.addPass(ao);
+  }
+  let bokeh = null;
+  if (post.dof) {
+    bokeh = new BokehPass(scene, camera, { focus: 20, aperture: 0.00008, maxblur: 0.004 });
+    composer.addPass(bokeh);
+  }
+  if (post.bloom) composer.addPass(new UnrealBloomPass(new THREE.Vector2(width * ss, height * ss), 0.4, 0.45, 2.2));   // светятся только фары, сигналы, светофоры
+  composer.addPass(new OutputPass());
+
+  await allLoaded();
+  renderer.compile(scene, camera);
+
+  // ---------- камера ----------
+  // Ключ камеры — либо мировые координаты { pos, look }, либо привязка к объекту:
+  // { follow: 'me', offset: [вперёд, вверх, вправо], look: 'me' | [x,y,z], lookOffset: [...] }.
+  // focus: 'me' — глубина резкости по этому объекту.
+  const tmpV = new THREE.Vector3();
+  const local = (a, [f, u, r]) => {
+    const h = a.mesh.rotation.y;
+    // вперёд модели +x, вправо +z (в мире); поворот курса h
+    return new THREE.Vector3(a.mesh.position.x + f * Math.cos(h) + r * Math.sin(h), a.mesh.position.y + u, a.mesh.position.z - f * Math.sin(h) + r * Math.cos(h));
+  };
+  const keyPose = (k) => {
+    const pos = k.follow ? local(actors[k.follow], k.offset ?? [-8, 3, 0]) : new THREE.Vector3(...k.pos);
+    let look;
+    const lookTarget = k.look ?? k.follow;
+    if (typeof lookTarget === 'string') look = local(actors[lookTarget], k.lookOffset ?? [2, 1, 0]);
+    else look = new THREE.Vector3(...lookTarget);
+    const focusObj = typeof k.focus === 'string' ? actors[k.focus] : typeof lookTarget === 'string' ? actors[lookTarget] : null;
+    // глубина резкости — только на планах «на объект» (на общих почти не видна, а стоит ~30% времени кадра)
+    const dof = k.dof ?? typeof lookTarget === 'string';
+    return { pos, look, fov: k.fov ?? 40, dof, focus: focusObj ? focusObj.mesh.position.clone().setY(1) : look.clone() };
+  };
   const camKeys = scenario.camera;
+  function placeCamera(t) {
+    let i = 0;
+    while (i < camKeys.length - 2 && camKeys[i + 1].t <= t) i++;
+    const ka = camKeys[i], kb = camKeys[Math.min(i + 1, camKeys.length - 1)];
+    // cut: true у ключа — монтажная склейка: до его времени держим прошлый план, потом сразу новый
+    const u = kb.cut ? (t >= kb.t ? 1 : 0) : kb.t === ka.t ? 1 : smooth(clamp((t - ka.t) / (kb.t - ka.t), 0, 1));
+    const A = keyPose(ka), B = keyPose(kb);
+    camera.position.lerpVectors(A.pos, B.pos, u);
+    camera.fov = lerp(A.fov, B.fov, u);
+    camera.updateProjectionMatrix();
+    const look = A.look.clone().lerp(B.look, u);
+    camera.lookAt(look);
+    camera.updateMatrixWorld();
+    if (bokeh) {
+      bokeh.enabled = u < 0.5 ? A.dof : B.dof;
+      const focus = A.focus.clone().lerp(B.focus, u);
+      bokeh.uniforms.focus.value = camera.position.distanceTo(focus);
+    }
+    // тени: «коробка» солнца следует за точкой взгляда, с привязкой к сетке теней (без дрожания)
+    const texel = (2 * S) / sun.shadow.mapSize.x;
+    const c = look.clone();
+    c.x = Math.round(c.x / texel) * texel; c.z = Math.round(c.z / texel) * texel; c.y = 0;
+    sun.target.position.copy(c);
+    sun.position.copy(c).addScaledVector(sunDir, 160);
+    return look;
+  }
 
   // --- оверлей ---
   overlay.innerHTML = '';
@@ -435,9 +256,8 @@ export async function createEngine(canvas, overlay, scenario, size) {
   }
   const cta = scenario.cta ? (() => { const d = el('cta'); d.innerHTML = `<div class="cta-t">${markup(scenario.cta.text)}</div><div class="cta-s">${scenario.cta.sub ?? ''}</div>`; return { c: scenario.cta, d }; })() : null;
 
-  const vis = (d, on, fade = 0) => { d.style.opacity = on; d.style.display = on > 0.001 ? '' : 'none'; };
+  const vis = (d, on) => { d.style.opacity = on; d.style.display = on > 0.001 ? '' : 'none'; };
   const win = (t, t0, t1, f = 0.25) => clamp(Math.min((t - t0) / f, (t1 - t) / f), 0, 1);
-
   const tmp = new THREE.Vector3();
   const project = (v3) => {
     tmp.copy(v3).project(camera);
@@ -448,50 +268,35 @@ export async function createEngine(canvas, overlay, scenario, size) {
     // объекты
     for (const a of Object.values(actors)) {
       const p = a.path.at(t);
-      a.mesh.position.set(p.x, 0.25, p.z);
+      const ped = a.def.type === 'pedestrian';
+      a.mesh.position.set(p.x, ped ? groundY(roads, p.x, p.z) : 0, p.z);
       a.mesh.rotation.y = a.path.headingAt(t);
       if (a.def.appear) a.mesh.visible = t >= a.def.path[0].t && t <= a.def.path.at(-1).t;
-      if (a.def.blinker && a.mesh.userData.blink) {
-        const bl = a.def.blinker;
-        const on = t >= bl.t0 && t <= bl.t1 && Math.floor(t * 2.6) % 2 === 0;
-        for (const side of ['left', 'right']) a.mesh.userData.blink[side].forEach((m) => (m.visible = on && side === bl.side));
-      }
-      if (a.def.type === 'pedestrian') {
-        const sp = a.path.speedAt(t);
-        const k = Math.sin(t * 9) * 0.35 * clamp(sp, 0, 1);
-        a.mesh.userData.legs[0].rotation.z = k; a.mesh.userData.legs[1].rotation.z = -k;
-        a.mesh.rotation.y = a.path.headingAt(t) + Math.PI / 2 * 0; // курс уже по движению
-        a.mesh.position.y = 0.25 + Math.abs(Math.sin(t * 9)) * 0.04 * clamp(sp, 0, 1);
-      }
+      const kin = a.path.kin(t);
+      if (ped) a.mesh.userData.mixer ? animateModelPedestrian(a.mesh, t, kin) : animatePedestrian(a.mesh, kin);
+      else animateVehicle(a.mesh, a.def, t, kin);
     }
-    // камера
-    let i = 0;
-    while (i < camKeys.length - 2 && camKeys[i + 1].t <= t) i++;
-    const a = camKeys[i], b = camKeys[Math.min(i + 1, camKeys.length - 1)];
-    const u = b.t === a.t ? 1 : smooth(clamp((t - a.t) / (b.t - a.t), 0, 1));
-    camera.position.set(lerp(a.pos[0], b.pos[0], u), lerp(a.pos[1], b.pos[1], u), lerp(a.pos[2], b.pos[2], u));
-    camera.fov = lerp(a.fov ?? 50, b.fov ?? 50, u);
-    camera.updateProjectionMatrix();
-    camera.lookAt(lerp(a.look[0], b.look[0], u), lerp(a.look[1], b.look[1], u), lerp(a.look[2], b.look[2], u));
-    camera.updateMatrixWorld();
+    for (const v of city.variants) v.tree.update(t);
+    placeCamera(t);
 
     // подсветки
     for (const { h, m } of rings) {
       const on = win(t, h.t0, h.t1);
       m.visible = on > 0;
       const tgt = actors[h.target];
-      if (tgt) m.position.set(tgt.mesh.position.x, 0.4, tgt.mesh.position.z);
-      const pulse = 1 + Math.sin(t * 7) * 0.1;
-      const sc = (h.size ?? 3) * pulse;
+      if (tgt) m.position.set(tgt.mesh.position.x, 0.05, tgt.mesh.position.z);
+      const sc = (h.size ?? 3) * (1 + Math.sin(t * 7) * 0.06);
       m.scale.set(sc, sc, sc);
-      m.material.opacity = on;
+      m.material.opacity = on * 0.9;
     }
     for (const { r, g } of ribbons) {
       const on = win(t, r.t0, r.t1);
       g.visible = on > 0;
-      g.children.forEach((c) => (c.material.opacity = 0.85 * on));
+      g.children.forEach((c) => (c.material.opacity = 0.8 * on));
     }
-    renderer.render(scene, camera);
+    renderer.info.reset();
+    composer.render();
+    window.__renderInfo = { triangles: renderer.info.render.triangles, calls: renderer.info.render.calls };   // для замеров
 
     // оверлей
     for (const { h, d } of hooks) vis(d, win(t, h.t0, h.t1));
@@ -502,14 +307,14 @@ export async function createEngine(canvas, overlay, scenario, size) {
       if (on > 0) {
         let pos;
         if (typeof l.target === 'string') {
-          const m = actors[l.target].mesh.position;
-          pos = new THREE.Vector3(m.x, (l.height ?? 3.6), m.z);
+          const m = actors[l.target].mesh;
+          pos = new THREE.Vector3(m.position.x, m.position.y + (l.height ?? (m.userData.length > 6 ? 4.2 : 2.6)), m.position.z);
         } else pos = new THREE.Vector3(l.target[0], l.target[1], l.target[2]);
         const s = project(pos);
-        // не даём подписи уйти за край кадра
         const half = d.offsetWidth / 2 + width * 0.02;
         const x = clamp(s.x, half, width - half);
-        d.style.transform = `translate(${x}px, ${s.y}px) translate(-50%, -100%) scale(${0.85 + 0.15 * on})`;
+        const y = clamp(s.y, height * 0.2, height * 0.8);   // не залезать на плашку сверху
+        d.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%) scale(${0.85 + 0.15 * on})`;
       }
     }
     if (card) {

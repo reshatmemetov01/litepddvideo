@@ -6,12 +6,14 @@
 <link rel="stylesheet" href="/node_modules/@fontsource/montserrat/cyrillic-800.css">
 <link rel="stylesheet" href="/node_modules/@fontsource/montserrat/latin-800.css">
 <link rel="stylesheet" href="/src/web/style.css">
-<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js"}}</script>
+<script type="importmap">{"imports":{"three":"/node_modules/three/build/three.module.js","three/addons/":"/node_modules/three/examples/jsm/","@dgreenheck/ez-tree":"/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js","meshoptimizer/":"/node_modules/meshoptimizer/"}}</script>
 </head>
 <body>
 <div id="stage"><canvas id="gl"></canvas><div id="overlay"></div></div>
 <script type="module">
 import { createEngine } from '/src/web/engine.js';
+window.addEventListener('unhandledrejection', (e) => { window.loadError = String(e.reason?.stack || e.reason); });
+window.addEventListener('error', (e) => { window.loadError = String(e.error?.stack || e.message); });
 const q = new URLSearchParams(location.search);
 const width = +q.get('w'), height = +q.get('h');
 const stage = document.getElementById('stage');
@@ -21,7 +23,8 @@ document.documentElement.style.fontSize = (height / 96) + 'px';
 const scenario = await (await fetch('/' + q.get('scenario'))).json();
 await document.fonts.load('800 20px Montserrat', 'Привет');
 await document.fonts.load('700 20px Montserrat', 'Привет');
-const engine = await createEngine(document.getElementById('gl'), document.getElementById('overlay'), scenario, { width, height });
+const opts = JSON.parse(q.get('opts') || '{}');   // качество: суперсэмплинг и постобработка
+const engine = await createEngine(document.getElementById('gl'), document.getElementById('overlay'), scenario, { width, height }, opts);
 window.duration = engine.duration;
 window.renderAt = engine.renderAt;
 window.ready = true;

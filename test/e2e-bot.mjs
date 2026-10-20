@@ -74,7 +74,7 @@ fs.mkdirSync(path.join(work, 'data'), { recursive: true });
 fs.writeFileSync(path.join(work, 'data', 'pronunciation.json'), JSON.stringify({ Светофор: 'Свето-фор' }));   // проверка пользовательского словаря
 const bot = spawn('node', ['src/bot/bot.mjs'], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true,   // своя группа процессов: при завершении гасим и Chromium/ffmpeg рендера
-  env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
+  env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_FPS: '2' },
 });
 let botLog = '';
 bot.stdout.on('data', (d) => (botLog += d));

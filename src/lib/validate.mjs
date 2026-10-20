@@ -1,5 +1,11 @@
 // Проверка сценария до рендера: возвращает список понятных ошибок (пустой — всё хорошо).
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseAnchor } from './timeline.mjs';
+
+const MODELS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'models', 'models.json');
+const knownModels = () => { try { return JSON.parse(fs.readFileSync(MODELS, 'utf8')); } catch { return {}; } };
 
 const OBJECT_TYPES = ['car', 'bus', 'truck', 'pedestrian'];
 const LIGHT_STATES = ['red', 'yellow', 'green', 'off'];
@@ -43,6 +49,7 @@ export function validateScenario(s) {
     if (ids.has(o.id)) err(`objects: id «${o.id}» повторяется`);
     ids.add(o.id);
     if (!OBJECT_TYPES.includes(o.type)) err(`объект «${o.id}»: тип «${o.type}» неизвестен (${OBJECT_TYPES.join(', ')})`);
+    if (o.model !== undefined && !(o.model in knownModels())) err(`объект «${o.id}»: модели «${o.model}» нет в assets/models/models.json`);
     if (!Array.isArray(o.path) || o.path.length < 2) return err(`объект «${o.id}»: в path нужно минимум 2 точки`);
     o.path.forEach((p, i) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') err(`объект «${o.id}», точка ${i + 1}: нужны числа x и z`);
@@ -58,9 +65,17 @@ export function validateScenario(s) {
   (s.routes ?? []).forEach((r, i) => { checkTime(r.t0, `routes[${i + 1}].t0`); checkTime(r.t1, `routes[${i + 1}].t1`); });
 
   if (!Array.isArray(s.camera) || !s.camera.length) err('camera: нужны ключевые кадры камеры');
+  const vec3 = (v) => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number');
   (s.camera ?? []).forEach((c, i) => {
-    checkTime(c.t, `camera[${i + 1}]`);
-    if (!Array.isArray(c.pos) || !Array.isArray(c.look)) err(`camera[${i + 1}]: нужны pos и look ([x, y, z])`);
+    const where = `camera[${i + 1}]`;
+    checkTime(c.t, where);
+    // ключ камеры: мировые координаты (pos) или слежение за объектом (follow + offset [вперёд, вверх, вправо])
+    if (c.follow !== undefined) { needId(c.follow, `${where}.follow`); if (c.offset && !vec3(c.offset)) err(`${where}.offset: [вперёд, вверх, вправо]`); }
+    else if (!vec3(c.pos)) err(`${where}: нужны pos [x, y, z] или follow: "id объекта"`);
+    if (typeof c.look === 'string') needId(c.look, `${where}.look`);
+    else if (c.look !== undefined && !vec3(c.look)) err(`${where}.look: [x, y, z] или id объекта`);
+    else if (c.look === undefined && c.follow === undefined) err(`${where}: нужен look`);
+    if (c.focus !== undefined) needId(c.focus, `${where}.focus`);
   });
 
   if (s.card) {

@@ -1,0 +1,18 @@
+{
+  "_comment": "Бесплатные ресурсы Poly Haven (CC0). Скачиваются scripts/fetch-assets.mjs в assets/ext/ (не хранятся в git).",
+  "hdri": [{ "id": "kloofendal_48d_partly_cloudy_puresky", "res": "2k" }],
+  "textures": [
+    { "id": "asphalt_02", "res": "2k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "square_brick_paving", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "brushed_concrete", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "sparse_grass", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "grey_plaster", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "painted_plaster_wall", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] },
+    { "id": "brick_4", "res": "1k", "maps": ["Diffuse", "nor_gl", "Rough"] }
+  ],
+  "models": [
+    { "id": "fire_hydrant", "res": "1k" },
+    { "id": "painted_wooden_bench", "res": "1k" },
+    { "id": "shrub_01", "res": "1k" }
+  ]
+}

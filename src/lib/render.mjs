@@ -3,7 +3,6 @@ import { chromium } from 'playwright-core';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateScenario } from './validate.mjs';
@@ -12,6 +11,13 @@ import { mixAudio } from './music.mjs';
 
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SIZES = { draft: [540, 960], hd: [720, 1280], fhd: [1080, 1920] };
+// качество картинки: ss — рендер в ss раз крупнее со сжатием (гладкие края), post — эффекты
+export const LOOKS = {
+  draft: { ss: 1, fps: 15, post: { bloom: false, dof: false, ao: false } },   // черновик: проверить сцену, плавность не важна
+  // AO (затенение в углах) даёт +60% ко времени кадра — по умолчанию выключено (RENDER_AO=1 включает)
+  hd: { ss: 1.5, post: { bloom: true, dof: true, ao: false } },
+  fhd: { ss: 1.5, post: { bloom: true, dof: true, ao: false } },
+};
 
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2', '.woff': 'font/woff' };
 
@@ -40,7 +46,7 @@ const run = (cmd, args) => new Promise((resolve, reject) => {
  * @param {string} o.out        путь к итоговому mp4
  * @param {number[]} [o.onlyFrames] только эти моменты (сек) в PNG рядом с out
  */
-export async function renderScenario({ scenario, durations, audio, music, quality = 'hd', out, workers, fps = 30, onProgress, onlyFrames, limitFrames, timeoutMs = 45 * 60 * 1000 }) {
+export async function renderScenario({ scenario, durations, audio, music, quality = 'hd', out, workers, fps: fpsArg, onProgress, onlyFrames, limitFrames, range, timeoutMs = 4 * 3600 * 1000 }) {
   const errors = validateScenario(scenario);
   if (errors.length) throw Object.assign(new Error('Сценарий не прошёл проверку:\n• ' + errors.join('\n• ')), { errors });
 
@@ -57,8 +63,14 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
 
   const server = await startServer();
   const port = server.address().port;
-  // каждая вкладка ~0,5 ГБ: на 4 ГБ безопаснее 2, на большем объёме — до 3 (или RENDER_WORKERS)
-  const auto = os.totalmem() < 6 * 2 ** 30 ? 2 : Math.min(3, Math.max(1, os.cpus().length - 1));
+  const look = structuredClone(LOOKS[quality] ?? LOOKS.hd);
+  const fps = +process.env.RENDER_FPS || fpsArg || look.fps || 30;
+  if (process.env.RENDER_AO) look.post.ao = process.env.RENDER_AO === '1';
+  if (process.env.RENDER_SS) look.ss = +process.env.RENDER_SS;
+  if (process.env.RENDER_POST) Object.assign(look.post, JSON.parse(process.env.RENDER_POST));   // для замеров: {"dof":false}
+  // программная видеокарта (SwiftShader) сама занимает все ядра: в качественном режиме вторая вкладка
+  // только мешает (замер: 4,1 с/кадр одна против 9,3 с/кадр на каждую из двух). В черновике — 2 вкладки.
+  const auto = look.ss > 1 || look.post.dof ? 1 : 2;
   const n = Math.max(1, workers ?? (+process.env.RENDER_WORKERS || auto));
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium',
@@ -73,21 +85,28 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
     for (let i = 0; i < (onlyFrames ? 1 : n); i++) {
       const page = await browser.newPage({ viewport: { width: W, height: H } });
       page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-      await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}`);
-      await page.waitForFunction('window.ready === true', null, { timeout: 60000 });
+      await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}&opts=${encodeURIComponent(JSON.stringify(look))}`);
+      await page.waitForFunction('window.ready === true || window.loadError', null, { timeout: 300000 });
+      const loadError = await page.evaluate('window.loadError');
+      if (loadError) throw new Error('Сцена не загрузилась: ' + loadError);
       pages.push(page);
     }
 
     if (onlyFrames) {
       const base = out.replace(/\.mp4$/, '');
       for (const t of onlyFrames) {
+        const t0 = Date.now();
         await pages[0].evaluate((t) => window.renderAt(t), t);
         await pages[0].screenshot({ path: `${base}_t${String(t).replace('.', '_')}.png` });
+        if (process.env.RENDER_TIMING && t === onlyFrames[0]) console.log('город:', JSON.stringify(await pages[0].evaluate('window.__cityStats')));
+        if (process.env.RENDER_TIMING) console.log(`кадр t=${t}: ${((Date.now() - t0) / 1000).toFixed(1)} c (с учётом снимка)`, JSON.stringify(await pages[0].evaluate('window.__renderInfo')));
       }
       return { out: null, duration: resolved.duration };
     }
 
-    const total = limitFrames ?? Math.round(resolved.duration * fps);
+    // range: [с, по] в секундах — отрендерить только кусок (для быстрого просмотра, без звука)
+    const first = range ? Math.round(range[0] * fps) : 0;
+    const total = range ? Math.round((range[1] - range[0]) * fps) : limitFrames ?? Math.round(resolved.duration * fps);
     const ff = spawn('ffmpeg', ['-y', '-v', 'error', '-f', 'image2pipe', '-framerate', String(fps), '-i', '-',
       '-c:v', 'libx264', '-preset', quality === 'draft' ? 'veryfast' : 'medium', '-crf', quality === 'fhd' ? '18' : '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', silent], { stdio: ['pipe', 'inherit', 'inherit'] });
     ffRef = ff;
@@ -111,7 +130,7 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
         if (next >= total) return;
         if (next - written > LOOKAHEAD) { await new Promise((r) => setTimeout(r, 20)); continue; }
         const f = next++;
-        await page.evaluate((t) => window.renderAt(t), f / fps);
+        await page.evaluate((t) => window.renderAt(t), (first + f) / fps);
         ready.set(f, await page.screenshot({ type: 'jpeg', quality: 93 }));
         await flush();
       }
@@ -122,7 +141,7 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
 
     // музыку можно отключить для отдельного ролика: "music": false в сценарии
     const bg = scenario.music === false ? null : music;
-    if (audio || bg) {
+    if (!range && (audio || bg)) {
       await mixAudio({ video: silent, voice: audio, music: bg, duration: resolved.duration, out });
       fs.rmSync(silent, { force: true });
     } else {
