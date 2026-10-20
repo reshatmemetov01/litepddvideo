@@ -167,7 +167,9 @@ try {
   const ttsData = scen.raw.match(/"callback_data":"(tts:[^"]+)"/)?.[1];
   check(!!ttsData && /симв\./.test(scen.raw), `кнопка есть (${ttsData})`);
   const chars = +scen.raw.match(/\((\d+) симв\./)[1];
-  check(chars > 300 && chars < 450, `число символов разумное: ${chars}`);
+  const { countChars } = await import('../src/lib/tts.mjs');
+  const expected = countChars(JSON.parse(fs.readFileSync(files.doc1, 'utf8')).voiceover.map((v) => v.text), path.join(work, 'data'));
+  check(chars === expected, `число символов на кнопке совпадает с текстом озвучки: ${chars}`);
   const tts = () => elCalls.filter((c) => c.url.includes('/text-to-speech/') && !/Пробная|Проверяем/.test(c.body?.text ?? ''));
   const voices = () => count('sendVoice');
   const v0 = voices();
