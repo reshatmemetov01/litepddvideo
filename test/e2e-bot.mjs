@@ -70,6 +70,8 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.once('listening', r));
 const port = server.address().port;
 
+fs.mkdirSync(path.join(work, 'data'), { recursive: true });
+fs.writeFileSync(path.join(work, 'data', 'pronunciation.json'), JSON.stringify({ Светофор: 'Свето-фор' }));   // проверка пользовательского словаря
 const bot = spawn('node', ['src/bot/bot.mjs'], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true,   // своя группа процессов: при завершении гасим и Chromium/ffmpeg рендера
   env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
@@ -120,7 +122,7 @@ try {
   const elText = await waitFor((c) => c.method === 'sendMessage' && c.body.text?.startsWith('<pre>'), 'текст для ElevenLabs');
   const t = elText.body.text;
   check((t.match(/&lt;break time="1\.5s" \/&gt;/g) ?? []).length === 7, 'между 8 фразами 7 меток паузы (экранированы для Telegram)');
-  check(t.includes('пэ-дэ-дэ') && !t.includes('ПДД') && !/\[[gry]\]/.test(t), 'произношение исправлено, разметка субтитров убрана');
+  check(t.includes('Свето-фор') && t.includes('ПДД') && !/\[[gry]\]/.test(t), 'словарь произношения применён, «ПДД» осталось как есть, разметка субтитров убрана');
   check(t.includes('у нас нет.'), 'фразы без точки получили точку');
 
   console.log('3. Голосовое → обработка → ждём подтверждения');

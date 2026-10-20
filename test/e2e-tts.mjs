@@ -95,6 +95,8 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.once('listening', r));
 const port = server.address().port;
 
+fs.mkdirSync(path.join(work, 'data'), { recursive: true });
+fs.writeFileSync(path.join(work, 'data', 'pronunciation.json'), JSON.stringify({ Светофор: 'Свето-фор' }));   // проверка пользовательского словаря
 const bot = spawn('node', ['src/bot/bot.mjs'], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: true,   // своя группа процессов: при завершении гасим и Chromium/ffmpeg рендера
   env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, ELEVENLABS_API_KEY: 'testkey', ELEVENLABS_API_ROOT: `http://127.0.0.1:${el.address().port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
@@ -182,7 +184,7 @@ try {
   const newData = v1.raw.match(/"callback_data":"(ttsnew:[^"]+)"/)?.[1];
   check(tts().length === 8, `к ElevenLabs ушло 8 запросов (по фразе): ${tts().length}`);
   check(tts().every((c) => c.key === 'testkey' && c.url.includes('/text-to-speech/CLONED1')), 'озвучка идёт клонированным голосом');
-  check(tts().some((c) => /пэ-дэ-дэ/.test(c.body.text)) && !tts().some((c) => /ПДД|\[[gry]\]/.test(c.body.text)), 'словарь произношения применён, разметка субтитров убрана');
+  check(tts().some((c) => /Свето-фор/.test(c.body.text)) && tts().some((c) => /ПДД/.test(c.body.text)) && !tts().some((c) => /\[[gry]\]/.test(c.body.text)), 'словарь произношения применён, «ПДД» осталось как есть, разметка субтитров убрана');
   check(!!okData && !!newData, 'кнопки «Всё хорошо» и «Другой дубль» есть');
   await waitFor(has('sendMessage', 'ElevenLabs: использовано'), 'остаток символов');
   check(true, 'бот показал остаток символов в ElevenLabs');
