@@ -8,7 +8,12 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const API_ROOT = process.env.ELEVENLABS_API_ROOT ?? 'https://api.elevenlabs.io';
 
-export const ttsConfigured = () => !!(process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID);
+// ID голоса: клон, созданный ботом командой /clone (data/voice.json), иначе ELEVENLABS_VOICE_ID из .env
+const voiceFile = (dataDir) => path.join(dataDir, 'voice.json');
+export function savedVoice(dataDir) { try { return JSON.parse(fs.readFileSync(voiceFile(dataDir), 'utf8')); } catch { return null; } }
+export const currentVoiceId = (dataDir) => savedVoice(dataDir)?.voiceId ?? process.env.ELEVENLABS_VOICE_ID ?? null;
+export const ttsKeySet = () => !!process.env.ELEVENLABS_API_KEY;
+export const ttsConfigured = (dataDir) => ttsKeySet() && !!currentVoiceId(dataDir);
 
 export function voiceSettings() {
   const n = (k, d) => (process.env[k] !== undefined ? +process.env[k] : d);
@@ -70,8 +75,9 @@ async function callTts(text, key, voiceId) {
  * @returns {{files: string[], chars: number, fromCache: number}} chars — сколько символов реально списано
  */
 export async function synthesizePhrases(texts, { dataDir, fresh = false }) {
-  const key = process.env.ELEVENLABS_API_KEY, voiceId = process.env.ELEVENLABS_VOICE_ID;
-  if (!key || !voiceId) throw new TtsError('Не заданы ELEVENLABS_API_KEY и ELEVENLABS_VOICE_ID в .env');
+  const key = process.env.ELEVENLABS_API_KEY, voiceId = currentVoiceId(dataDir);
+  if (!key) throw new TtsError('Не задан ELEVENLABS_API_KEY в .env');
+  if (!voiceId) throw new TtsError('Голос не выбран: склонируйте его командой /clone');
   const cacheDir = path.join(dataDir, 'tts-cache');
   fs.mkdirSync(cacheDir, { recursive: true });
   const dict = loadDictionary(dataDir);
@@ -101,4 +107,26 @@ export async function getUsage() {
     const j = await res.json();
     return { used: j.character_count, limit: j.character_limit };
   } catch { return null; }
+}
+
+/** Создаёт клон голоса (Instant Voice Clone) по записи и запоминает его ID для озвучки. */
+export async function cloneVoice(audioFile, { dataDir, name }) {
+  const key = process.env.ELEVENLABS_API_KEY;
+  if (!key) throw new TtsError('Не задан ELEVENLABS_API_KEY в .env');
+  const form = new FormData();
+  form.append('name', name);
+  form.append('remove_background_noise', 'false');   // микрофон чистый, шумодав только испортит тембр
+  form.append('files', new Blob([fs.readFileSync(audioFile)], { type: 'audio/mpeg' }), path.basename(audioFile));
+  const res = await fetch(`${API_ROOT}/v1/voices/add`, { method: 'POST', headers: { 'xi-api-key': key }, body: form });
+  const body = await res.text();
+  if (!res.ok) {
+    if (res.status === 401) throw new TtsError(explain(401, body));
+    if ([400, 402, 403].includes(res.status)) throw new TtsError(`ElevenLabs не создал клон (${res.status}). Скорее всего, на вашем тарифе нет клонирования голоса или закончились слоты для голосов. Ответ: ${body.slice(0, 200)}`);
+    throw new TtsError(explain(res.status, body));
+  }
+  const voiceId = JSON.parse(body).voice_id;
+  const previous = savedVoice(dataDir);
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(voiceFile(dataDir), JSON.stringify({ voiceId, name, createdAt: Date.now() }, null, 1));
+  return { voiceId, previous };
 }

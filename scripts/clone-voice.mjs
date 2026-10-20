@@ -1,28 +1,23 @@
-// Создаёт клон голоса в ElevenLabs (Instant Voice Clone) и печатает Voice ID.
-// ELEVENLABS_API_KEY=... node scripts/clone-voice.mjs "Мой голос" запись1.mp3 [запись2.mp3 ...]
-// Нужен платный тариф с клонированием. Загружайте исходные записи (не обработанные шумодавом), от 1 минуты.
+// Создаёт клон голоса в ElevenLabs и печатает Voice ID (то же делает команда /clone в боте).
+// ELEVENLABS_API_KEY=... node scripts/clone-voice.mjs "Мой голос" запись.mp3
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { cloneVoice } from '../src/lib/tts.mjs';
 
-const [name, ...files] = process.argv.slice(2);
-const key = process.env.ELEVENLABS_API_KEY;
-const root = process.env.ELEVENLABS_API_ROOT ?? 'https://api.elevenlabs.io';
-if (!key || !name || !files.length) {
-  console.error('Использование: ELEVENLABS_API_KEY=... node scripts/clone-voice.mjs "Название" запись.mp3 [...]');
+const [name, file] = process.argv.slice(2);
+if (!process.env.ELEVENLABS_API_KEY || !name || !file) {
+  console.error('Использование: ELEVENLABS_API_KEY=... node scripts/clone-voice.mjs "Название" запись.mp3');
   process.exit(1);
 }
-const form = new FormData();
-form.append('name', name);
-form.append('remove_background_noise', 'false');   // ваш микрофон чистый, не портим тембр
-for (const f of files) form.append('files', new Blob([fs.readFileSync(f)]), path.basename(f));
-
-const res = await fetch(`${root}/v1/voices/add`, { method: 'POST', headers: { 'xi-api-key': key }, body: form });
-const text = await res.text();
-if (!res.ok) {
-  console.error(`Ошибка ${res.status}: ${text.slice(0, 500)}`);
-  if (res.status === 401) console.error('Ключ не принят.');
-  if (res.status === 400 || res.status === 402 || res.status === 403) console.error('Возможно, на вашем тарифе недоступно клонирование голоса.');
-  process.exit(1);
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'clone-'));
+try {
+  const { voiceId } = await cloneVoice(file, { dataDir: tmp, name });
+  console.log('Готово. Voice ID:', voiceId);
+  console.log('Впишите его в .env: ELEVENLABS_VOICE_ID=' + voiceId);
+} catch (e) {
+  console.error(e.message);
+  process.exitCode = 1;
+} finally {
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
-console.log('Готово. Voice ID:', JSON.parse(text).voice_id);
-console.log('Впишите его в .env: ELEVENLABS_VOICE_ID=' + JSON.parse(text).voice_id);

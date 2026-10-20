@@ -12,7 +12,10 @@ const work = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-bot-'));
 const TOKEN = '123:test';
 
 const voiceFile = null;
-const files = { doc1: path.join(root, 'ready', 'q13_levo_svetofor.json') };
+const longRec = path.join(work, 'long.mp3'), shortRec = path.join(work, 'short.mp3');
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=180:d=70', '-c:a', 'libmp3lame', longRec]);
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=180:d=5', '-c:a', 'libmp3lame', shortRec]);
+const files = { doc1: path.join(root, 'ready', 'q13_levo_svetofor.json'), long1: longRec, short1: shortRec };
 const calls = [];
 const elCalls = [];
 const el = http.createServer((req, res) => {
@@ -20,6 +23,12 @@ const el = http.createServer((req, res) => {
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     if (req.url.startsWith('/v1/user/subscription')) { res.setHeader('Content-Type', 'application/json'); return res.end(JSON.stringify({ character_count: 1234, character_limit: 30000 })); }
+    if (req.url.startsWith('/v1/voices/add')) {
+      const raw = Buffer.concat(chunks);
+      elCalls.push({ url: req.url, key: req.headers['xi-api-key'], multipart: /multipart\/form-data/.test(req.headers['content-type']), size: raw.length, hasName: raw.toString('latin1').includes('name="name"') });
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ voice_id: 'CLONED1' }));
+    }
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     elCalls.push({ url: req.url, key: req.headers['xi-api-key'], body });
     if (req.headers['xi-api-key'] !== 'testkey') { res.statusCode = 401; return res.end('{"detail":{"status":"invalid_api_key"}}'); }
@@ -79,7 +88,7 @@ const port = server.address().port;
 
 const bot = spawn('node', ['src/bot/bot.mjs'], {
   cwd: root, stdio: ['ignore', 'pipe', 'pipe'],
-  env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, ELEVENLABS_API_KEY: 'testkey', ELEVENLABS_VOICE_ID: 'voice123', ELEVENLABS_API_ROOT: `http://127.0.0.1:${el.address().port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
+  env: { ...process.env, BOT_TOKEN: TOKEN, ALLOWED_IDS: '1', TELEGRAM_API_ROOT: `http://127.0.0.1:${port}`, ELEVENLABS_API_KEY: 'testkey', ELEVENLABS_API_ROOT: `http://127.0.0.1:${el.address().port}`, DATA_DIR: path.join(work, 'data'), RENDER_QUALITY: 'draft', RENDER_WORKERS: '3' },
 });
 let botLog = '';
 bot.stdout.on('data', (d) => (botLog += d));
@@ -121,21 +130,48 @@ try {
   await waitFor(has('sendMessage', 'Фразы для озвучки (8)'), 'разбор сценария');
   check(true, 'сценарий принят, 8 фраз');
 
-  console.log('3. Кнопка «Озвучить моим голосом» есть и показывает число символов');
+  check(!calls.some(has('sendMessage', 'Озвучить моим голосом')), 'пока голос не склонирован, кнопки озвучки нет');
+
+  console.log('3. /clone: короткая запись отклоняется, нормальная клонируется');
+  pushMsg({ text: '🧬 Клонировать голос' });
+  await waitFor(has('sendMessage', 'Пришлите запись вашего голоса'), 'инструкция по записи');
+  pushMsg({ audio: { file_id: 'short1', duration: 5, mime_type: 'audio/mpeg', file_name: 'short.mp3' } });
+  await waitFor(has('editMessageText', 'слишком короткая'), 'отказ на короткой записи');
+  check(!elCalls.some((c) => c.url.startsWith('/v1/voices/add')), 'короткая запись не ушла в ElevenLabs');
+  pushMsg({ audio: { file_id: 'long1', duration: 70, mime_type: 'audio/mpeg', file_name: 'my_voice.mp3' } });
+  await waitFor(has('editMessageText', 'Голос склонирован'), 'клон создан', 60000);
+  const add = elCalls.find((c) => c.url.startsWith('/v1/voices/add'));
+  check(add?.multipart && add.key === 'testkey' && add.hasName && add.size > 100000, 'запись ушла в ElevenLabs (multipart, ключ, имя)');
+  await waitFor((c) => c.method === 'sendVoice' && c.raw.includes('Пробная фраза'), 'пробная фраза новым голосом', 30000);
+  check(elCalls.some((c) => c.url.includes('/text-to-speech/CLONED1')), 'пробная фраза озвучена новым голосом');
+  check(fs.existsSync(path.join(work, 'data', 'voice.json')) && JSON.parse(fs.readFileSync(path.join(work, 'data', 'voice.json'), 'utf8')).voiceId === 'CLONED1', 'ID клона сохранён ботом');
+  check(!fs.existsSync(path.join(work, 'data', 'clone', 'raw.mp3')), 'исходная запись удалена после клонирования');
+  pushMsg({ text: '/voice', entities: [{ type: 'bot_command', offset: 0, length: 6 }] });
+  await waitFor(has('sendMessage', 'CLONED1'), '/voice показывает голос');
+  check(true, '/voice показывает текущий клон');
+
+  console.log('3b. Новый сценарий: кнопка «Озвучить моим голосом» появилась');
+  pushMsg({ text: '🎬 Создать видео' });
+  await sleep(500);
+  pushMsg({ document: { file_id: 'doc1', file_name: 'q13.json', mime_type: 'application/json' } });
   const scen = await waitFor(has('sendMessage', 'Озвучить моим голосом'), 'кнопка озвучки');
   const ttsData = scen.raw.match(/"callback_data":"(tts:[^"]+)"/)?.[1];
   check(!!ttsData && /симв\./.test(scen.raw), `кнопка есть (${ttsData})`);
   const chars = +scen.raw.match(/\((\d+) симв\./)[1];
   check(chars > 300 && chars < 450, `число символов разумное: ${chars}`);
+  const tts = () => elCalls.filter((c) => c.url.includes('/text-to-speech/') && !/Пробная|Проверяем/.test(c.body?.text ?? ''));
+  const voices = () => count('sendVoice');
+  const v0 = voices();
 
   console.log('4. Озвучка по фразам, предпросмотр, подтверждение ещё не нажато');
   pushCb(ttsData);
-  const v1 = await waitFor((c) => c.method === 'sendVoice', 'озвучка на проверку', 90000);
+  await waitFor(() => voices() === v0 + 1, 'озвучка на проверку', 90000);
+  const v1 = calls.filter((c) => c.method === 'sendVoice').at(-1);
   const okData = v1.raw.match(/"callback_data":"(ok:[^"]+)"/)?.[1];
   const newData = v1.raw.match(/"callback_data":"(ttsnew:[^"]+)"/)?.[1];
-  check(elCalls.length === 8, `к ElevenLabs ушло 8 запросов (по фразе): ${elCalls.length}`);
-  check(elCalls.every((c) => c.key === 'testkey' && c.url.includes('/text-to-speech/voice123')), 'ключ и голос переданы верно');
-  check(elCalls.some((c) => /пэ-дэ-дэ/.test(c.body.text)) && !elCalls.some((c) => /ПДД|\[[gry]\]/.test(c.body.text)), 'словарь произношения применён, разметка субтитров убрана');
+  check(tts().length === 8, `к ElevenLabs ушло 8 запросов (по фразе): ${tts().length}`);
+  check(tts().every((c) => c.key === 'testkey' && c.url.includes('/text-to-speech/CLONED1')), 'озвучка идёт клонированным голосом');
+  check(tts().some((c) => /пэ-дэ-дэ/.test(c.body.text)) && !tts().some((c) => /ПДД|\[[gry]\]/.test(c.body.text)), 'словарь произношения применён, разметка субтитров убрана');
   check(!!okData && !!newData, 'кнопки «Всё хорошо» и «Другой дубль» есть');
   await waitFor(has('sendMessage', 'ElevenLabs: использовано'), 'остаток символов');
   check(true, 'бот показал остаток символов в ElevenLabs');
@@ -143,16 +179,16 @@ try {
   check(count('sendVideo') === 0 && !calls.some(has('sendMessage', 'Начинаю рендер')), 'рендер НЕ стартовал без подтверждения');
 
   console.log('5. Повторная озвучка берётся из кэша (символы не тратятся)');
-  const before = elCalls.length;
+  const before = tts().length;
   pushCb(ttsData);
-  await waitFor(() => count('sendVoice') === 2, 'вторая озвучка', 60000);
-  check(elCalls.length === before, 'новых запросов к ElevenLabs нет');
+  await waitFor(() => voices() === v0 + 2, 'вторая озвучка', 60000);
+  check(tts().length === before, 'новых запросов к ElevenLabs нет');
   check(calls.some(has('editMessageText', 'взято из кэша')), 'бот сообщил, что символы не тратились');
 
   console.log('6. «Другой дубль» обходит кэш');
   pushCb(newData);
-  await waitFor(() => count('sendVoice') === 3, 'третья озвучка', 90000);
-  check(elCalls.length === before + 8, `новый дубль: ещё 8 запросов (${elCalls.length - before})`);
+  await waitFor(() => voices() === v0 + 3, 'третья озвучка', 90000);
+  check(tts().length === before + 8, `новый дубль: ещё 8 запросов (${tts().length - before})`);
 
   console.log('7. Подтверждение → рендер стартует');
   pushCb(okData);
