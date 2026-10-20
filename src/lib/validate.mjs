@@ -7,7 +7,7 @@ import { parseAnchor } from './timeline.mjs';
 const MODELS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'models', 'models.json');
 const knownModels = () => { try { return JSON.parse(fs.readFileSync(MODELS, 'utf8')); } catch { return {}; } };
 
-const OBJECT_TYPES = ['car', 'bus', 'truck', 'pedestrian'];
+const OBJECT_TYPES = ['car', 'bus', 'truck', 'tram', 'pedestrian'];
 const LIGHT_STATES = ['red', 'yellow', 'green', 'off'];
 const SIGN_TYPES = ['main_road', 'yield', 'stop', 'ped_crossing'];
 const ROADS = [['x', 'z'], ['z'], ['x']];

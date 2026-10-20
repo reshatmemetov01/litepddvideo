@@ -19,6 +19,15 @@
   "car": [
    "vw_passat",
    "bmw_m5"
+  ],
+  "truck": [
+   "zil_131"
+  ],
+  "bus": [
+   "maz_203"
+  ],
+  "tram": [
+   "tram_ktm5"
   ]
  },
  "vw_passat": {
@@ -41,5 +50,29 @@
   "lights": "Red_Low1$",
   "license": "CC-BY-NC-SA-4.0 — НЕКОММЕРЧЕСКАЯ. Ddiaz Design, https://sketchfab.com/3d-models/2018-bmw-m5-785e6ad50fae4df5a4abb6a39fcc6fcc",
   "blinkers": "Orange_Low1$"
+ },
+ "zil_131": {
+  "file": "trucks/zil_131.glb",
+  "length": 7.04,
+  "forward": "+z",
+  "wheels": "^(R|L)\\d\\d$",
+  "license": "CC-BY-4.0 — tiunov.se, https://sketchfab.com/3d-models/zil-131-b20ff18a43cb43e2b5c6bdd439b108e0"
+ },
+ "maz_203": {
+  "file": "buses/maz_203.glb",
+  "length": 12.0,
+  "forward": "+x",
+  "license": "CC-BY-4.0 — mamont nikita, https://sketchfab.com/3d-models/bus-maz-203-3f7e6c3df1194eadac584facd1467f9f",
+  "wheelSplit": "koleso",
+  "simplify": {
+   "^Collada visual scene group$": 0.5
+  }
+ },
+ "tram_ktm5": {
+  "file": "trams/ktm5_71-605.glb",
+  "length": 15.2,
+  "forward": "-z",
+  "hide": "^Object_2$",
+  "license": "CC-BY-4.0 — _Mdtv_, https://sketchfab.com/3d-models/5-71-605-3df07535c29044cfa83c698d6687d6f4"
  }
 }

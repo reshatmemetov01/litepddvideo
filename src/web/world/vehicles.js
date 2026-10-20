@@ -237,7 +237,7 @@ function truck(color) {
 
 export function makeVehicle(def) {
   const color = CAR_COLORS[def.color] ?? col(def.color) ?? CAR_COLORS.blue;
-  if (def.type === 'bus') return bus(def.color ? color : undefined);
+  if (def.type === 'bus' || def.type === 'tram') return bus(def.color ? color : def.type === 'tram' ? 0xd8432e : undefined);   // трамвай без модели — заглушка на базе автобуса
   if (def.type === 'truck') return truck(color);
   return sedan(color);
 }
@@ -275,6 +275,81 @@ const AXES = { '+x': [1, 0], '-x': [-1, 0], '+z': [0, 1], '-z': [0, -1] };
  * Машина из готовой модели: разворот носом в +x, масштаб по длине, колёса — на отдельные оси
  * (вращение и поворот), поворотники по углам, стоп-сигналы — материалы по шаблону имён.
  */
+/**
+ * Разрезает колёса, слитые в один объект (cfg.wheelSplit — шаблон материала дисков). Центры колёс —
+ * кластеры этого материала (ось × борт); к колесу уходят все треугольники модели внутри его цилиндра
+ * (шины, гайки). Радиус = высота центра над землёй. Колёса становятся группами «__wheel_N».
+ */
+function splitWheels(root, cfg) {
+  const re = new RegExp(cfg.wheelSplit, 'i');
+  const fwd = { '+x': 'x', '-x': 'x', '+z': 'z', '-z': 'z' }[cfg.forward ?? '+x'];
+  const lat = fwd === 'x' ? 'z' : 'x';
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const mid = box.getCenter(new THREE.Vector3());
+  const v = new THREE.Vector3();
+  // 1) вершины дисков → кластеры по длине (разрыв > 15% длины машины — новая ось) и по борту
+  const pts = [];
+  root.traverse((o) => {
+    if (!o.isMesh || !re.test(o.material.name ?? '')) return;
+    const pos = o.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) pts.push(v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld).clone());
+  });
+  if (!pts.length) return;
+  const len = box.max[fwd] - box.min[fwd];
+  const xs = [...new Set(pts.map((p) => Math.round(p[fwd] * 1000) / 1000))].sort((a, b) => a - b);
+  const axles = [[xs[0], xs[0]]];
+  for (const x of xs) { const a = axles.at(-1); if (x - a[1] > len * 0.15) axles.push([x, x]); else a[1] = x; }
+  const wheels = [];
+  for (const [a0, a1] of axles) for (const side of [-1, 1]) {
+    const cl = pts.filter((p) => p[fwd] >= a0 - 1e-6 && p[fwd] <= a1 + 1e-6 && Math.sign(p[lat] - mid[lat]) === side);
+    if (!cl.length) continue;
+    const b = new THREE.Box3().setFromPoints(cl);
+    const c = b.getCenter(new THREE.Vector3());
+    const r = c.y - box.min.y;
+    // шина касается земли: радиус = высота центра; поперёк — ширина диска с небольшим запасом (без арки кузова)
+    wheels.push({ c, r: r * 0.99, half: (b.max[lat] - b.min[lat]) / 2 + r * 0.08, tris: new Map() });
+  }
+  // 2) треугольники внутри цилиндра колеса уходят в колесо
+  const inside = (p, w) => Math.hypot(p[fwd] - w.c[fwd], p.y - w.c.y) < w.r && Math.abs(p[lat] - w.c[lat]) < w.half;
+  const meshes = [];
+  root.traverse((o) => { if (o.isMesh && !Array.isArray(o.material)) meshes.push(o); });
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (const m of meshes) {
+    const g = m.geometry, pos = g.attributes.position;
+    const idx = g.index ? g.index.array : [...Array(pos.count).keys()];
+    const keep = [], moved = wheels.map(() => []);
+    for (let t = 0; t < idx.length; t += 3) {
+      a.fromBufferAttribute(pos, idx[t]).applyMatrix4(m.matrixWorld);
+      b.fromBufferAttribute(pos, idx[t + 1]).applyMatrix4(m.matrixWorld);
+      c.fromBufferAttribute(pos, idx[t + 2]).applyMatrix4(m.matrixWorld);
+      // в колесо — только треугольники целиком внутри цилиндра (длинные треугольники обшивки остаются кузову)
+      const k = wheels.findIndex((w) => inside(a, w) && inside(b, w) && inside(c, w));
+      (k >= 0 ? moved[k] : keep).push(idx[t], idx[t + 1], idx[t + 2]);
+    }
+    if (moved.every((l) => !l.length)) continue;
+    moved.forEach((list, k) => {
+      if (!list.length) return;
+      const ng = new THREE.BufferGeometry();
+      for (const [name, attr] of Object.entries(g.attributes)) ng.setAttribute(name, attr);
+      ng.setIndex(list);
+      const part = new THREE.Mesh(ng, m.material);
+      part.name = m.material.name ?? '';
+      m.parent.add(part); part.position.copy(m.position); part.quaternion.copy(m.quaternion); part.scale.copy(m.scale);
+      wheels[k].tris.set(part, true);
+    });
+    if (keep.length) { const ng = g.clone(); ng.setIndex(keep); m.geometry = ng; } else m.removeFromParent();
+  }
+  root.updateMatrixWorld(true);
+  wheels.forEach((w, k) => {
+    const group = new THREE.Group();
+    group.name = `__wheel_${k}`;
+    group.userData.center = w.c.toArray();   // ось вращения — центр диска, а не габарит группы
+    root.add(group);
+    for (const part of w.tris.keys()) group.attach(part);
+  });
+}
+
 /** Сливает меши поддерева в один меш на материал (в координатах узла space), пропуская skip-поддеревья. */
 function mergeByMaterial(node, space, skip = []) {
   node.updateMatrixWorld(true);
@@ -325,12 +400,15 @@ export async function prepareVehicleModel(gltf, cfg) {
   }
   // сотни мелких деталей → по одному объекту на материал (кузов) и на колесо: у программной
   // видеокарты каждый вызов отрисовки дорогой, а у моделей с Sketchfab их по 500–700 на машину
-  const wheelRe = new RegExp(cfg.wheels ?? 'wheel|tire|tyre|колес', 'i');
+  if (cfg.wheelSplit) splitWheels(root, cfg);
+  const wheelRe = new RegExp(cfg.wheels ?? (cfg.wheelSplit ? '^__wheel_' : 'wheel|tire|tyre|колес'), 'i');
   root.updateMatrixWorld(true);
   const wheels = [];
   root.traverse((o) => { if (o !== root && wheelRe.test(o.name) && !wheels.some((w) => isAncestor(w, o))) wheels.push(o); });
-  for (const w of wheels) mergeByMaterial(w, w);
-  mergeByMaterial(root, root, wheels);
+  if (cfg.merge !== false) {
+    for (const w of wheels) mergeByMaterial(w, w);
+    mergeByMaterial(root, root, wheels);
+  }
   // «честное» преломление (transmission) требует лишнего прохода рендера на каждый кадр — заменяем тонировкой
   root.traverse((o) => {
     if (!o.isMesh) return;
@@ -350,7 +428,7 @@ export function makeVehicleFromModel(def, cfg, gltf) {
     o.castShadow = true; o.receiveShadow = true;
   });
   src.updateMatrixWorld(true);
-  const wheelRe = new RegExp(cfg.wheels ?? 'wheel|tire|tyre|колес', 'i');
+  const wheelRe = new RegExp(cfg.wheels ?? (cfg.wheelSplit ? '^__wheel_' : 'wheel|tire|tyre|колес'), 'i');
   const wheelNodes = [];
   src.traverse((o) => { if (o !== src && wheelRe.test(o.name) && !wheelNodes.some((w) => o.parent && isAncestor(w, o))) wheelNodes.push(o); });
   const center = (o) => new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
@@ -391,7 +469,8 @@ export function makeVehicleFromModel(def, cfg, gltf) {
   let radius = 0.33;
   for (const w of wheelNodes) {
     const wb = new THREE.Box3().setFromObject(w);
-    const wc = wb.getCenter(new THREE.Vector3());
+    // центр колеса: известный центр диска (разрезанные колёса) или середина габарита
+    const wc = w.userData.center ? new THREE.Vector3(...w.userData.center).applyMatrix4(src.matrixWorld).applyMatrix4(root.matrixWorld.clone().invert()) : wb.getCenter(new THREE.Vector3());
     radius = (wb.max.y - wb.min.y) / 2 || radius;
     const pivot = new THREE.Group(); pivot.position.copy(wc); root.add(pivot);
     const spin = new THREE.Group(); pivot.add(spin);

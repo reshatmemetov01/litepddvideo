@@ -147,11 +147,12 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   const registry = await (await fetch('/assets/models/models.json')).json();
   const defaults = registry._defaults ?? {};
   const actors = {};
-  let carIdx = 0;
+  const typeIdx = {};
   for (const [i, o] of scenario.objects.entries()) {
     let mesh;
-    // легковые без явной модели получают модели по умолчанию по очереди ("model": "procedural" — самодельная)
-    const modelName = o.model ?? (o.type === 'car' && defaults.car?.length ? defaults.car[carIdx++ % defaults.car.length] : null);
+    // транспорт без явной модели получает модели по умолчанию своего типа по очереди ("model": "procedural" — самодельная)
+    const pool = defaults[o.type];
+    const modelName = o.model ?? (pool?.length ? pool[(typeIdx[o.type] = (typeIdx[o.type] ?? -1) + 1) % pool.length] : null);
     if (modelName && modelName !== 'procedural') {
       const cfg = registry[modelName];
       if (!cfg) throw new Error(`Модели «${modelName}» нет в assets/models/models.json`);

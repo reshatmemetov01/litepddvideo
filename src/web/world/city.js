@@ -114,7 +114,24 @@ function markings(scene, M, roads, crosswalks) {
   inst.flush(scene);
 }
 
-export function buildRoads(scene, M, roads, crosswalks) {
+/** Трамвайные пути: tram = { road: 'z' | 'x', tracks: [смещение оси пути от оси дороги, ...] }. Колея 1520 мм. */
+function tramTracks(scene, M, tram) {
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8c8f94, metalness: 0.9, roughness: 0.25 });
+  const groove = new THREE.MeshStandardMaterial({ color: 0x1d1e20, roughness: 0.9 });
+  const bed = M.asphalt.clone(); bed.color = new THREE.Color(0x8e8e8e);   // полоса покрытия вдоль путей темнее
+  const L = FAR * 2;
+  for (const off of tram.tracks ?? [-2, 2]) {
+    const along = tram.road === 'x';
+    const put = (mat, w, h, y, d) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(along ? L : w, h, along ? w : L), mat);
+      m.position.set(along ? 0 : off + d, y, along ? off + d : 0); m.receiveShadow = true; scene.add(m);
+    };
+    put(bed, 2.3, 0.004, 0.002, 0);
+    for (const r of [-0.762, 0.762]) { put(groove, 0.12, 0.006, 0.004, r); put(steel, 0.065, 0.012, 0.006, r); }
+  }
+}
+
+export function buildRoads(scene, M, roads, crosswalks, tram) {
   const hasX = roads.includes('x'), hasZ = roads.includes('z');
   // газон — под всем
   scene.add(strip(M.grass, 0, 0, 900, 900, -0.03));
@@ -141,6 +158,7 @@ export function buildRoads(scene, M, roads, crosswalks) {
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) scene.add(slab(M.paving, sx * k, sz * k, size, size, KERB_H));
   }
   markings(scene, M, roads, crosswalks);
+  if (tram) tramTracks(scene, M, tram);
 }
 
 /** Высота поверхности под точкой: проезжая часть 0, тротуар и газон выше. */
@@ -282,7 +300,7 @@ export async function buildCity(scene, scenario) {
   const M = makeMaterials();
   const roads = scenario.scene.roads ?? ['x', 'z'];
   const crosswalks = scenario.scene.crosswalks ?? [];
-  buildRoads(scene, M, roads, crosswalks);
+  buildRoads(scene, M, roads, crosswalks, scenario.scene.tram);
 
   const inst = new Instances();
   const variants = makeTreeVariants();
