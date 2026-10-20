@@ -7,6 +7,7 @@ import { renderScenario } from '../lib/render.mjs';
 import { processRecording, assembleFromFiles, duration } from '../lib/audio.mjs';
 import { synthesizePhrases, countChars, cloneVoice, elevenLabsText, parseVoiceId, fetchVoiceInfo, addVoice, setActiveVoice, currentVoiceId, voiceName } from '../lib/tts.mjs';
 import { estimateDuration, layoutPhrases } from '../lib/timeline.mjs';
+import { DEFAULT_MUSIC } from '../lib/music.mjs';
 import { jobDir, readScenario, updateJob, getJob, dataDir } from './store.mjs';
 
 const strip = (t) => t.replace(/\[\/?[gry]\]/g, '');
@@ -123,6 +124,47 @@ export async function addLibraryVoice(text) {
   return { ...info, preview, active, previousName: active ? null : voiceName(dataDir, previous) };
 }
 
+// ---- фоновая музыка: data/settings.json { music: 'default' | 'custom' | 'off' } ----
+const settingsFile = () => path.join(dataDir, 'settings.json');
+export function getSettings() { try { return JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { return {}; } }
+export function setSettings(patch) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const s = { ...getSettings(), ...patch };
+  fs.writeFileSync(settingsFile(), JSON.stringify(s, null, 1));
+  return s;
+}
+const customMusic = () => path.join(dataDir, 'music', 'custom.mp3');
+/** Трек для роликов или null, если музыка выключена (в боте или MUSIC=off в .env). */
+export function currentMusic() {
+  const mode = getSettings().music ?? 'default';
+  if (mode === 'off' || process.env.MUSIC === 'off') return null;
+  if (mode === 'custom' && fs.existsSync(customMusic())) return customMusic();
+  return fs.existsSync(DEFAULT_MUSIC) ? DEFAULT_MUSIC : null;
+}
+export function musicStatus() {
+  const mode = getSettings().music ?? 'default';
+  if (process.env.MUSIC === 'off') return { on: false, text: 'выключена в .env (MUSIC=off)' };
+  if (mode === 'off') return { on: false, text: 'выключена' };
+  return { on: true, custom: mode === 'custom' && fs.existsSync(customMusic()), text: mode === 'custom' && fs.existsSync(customMusic()) ? 'включена, ваш трек' : 'включена, трек по умолчанию' };
+}
+/** Новый трек: перевод в mp3 и проверка длины. */
+export async function setCustomMusic(rawPath) {
+  const out = customMusic();
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const tmp = out + '.new.mp3';
+  try {
+    await ffmpeg(['-i', rawPath, '-vn', '-ac', '2', '-ar', '44100', '-b:a', '192k', tmp]);
+    const sec = await duration(tmp);
+    if (!(sec >= 10)) throw new Error(`Трек слишком короткий (${Math.round(sec || 0)} с), нужен хотя бы 10 с.`);
+    fs.renameSync(tmp, out);
+    setSettings({ music: 'custom' });
+    return sec;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+    fs.rmSync(rawPath, { force: true });
+  }
+}
+
 export const textForElevenLabs = (jobId) => elevenLabsText(readScenario(jobId).voiceover.map((v) => v.text), dataDir);
 
 export const ttsChars = (jobId) => countChars(readScenario(jobId).voiceover.map((v) => v.text), dataDir);
@@ -157,6 +199,7 @@ async function pump() {
       scenario: readScenario(jobId),
       durations: withVoice ? job.voice.durations : undefined,
       audio: withVoice ? job.voice.track : undefined,
+      music: currentMusic() ?? undefined,
       quality, out,
       onProgress: task.onProgress,
     });

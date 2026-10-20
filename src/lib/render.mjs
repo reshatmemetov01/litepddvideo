@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateScenario } from './validate.mjs';
 import { resolveScenario, estimateDuration } from './timeline.mjs';
+import { mixAudio } from './music.mjs';
 
 export const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SIZES = { draft: [540, 960], hd: [720, 1280], fhd: [1080, 1920] };
@@ -34,11 +35,12 @@ const run = (cmd, args) => new Promise((resolve, reject) => {
  * @param {object} o.scenario   сценарий (с якорями времени)
  * @param {number[]} [o.durations] длительности фраз по записи голоса; без них оцениваются по тексту
  * @param {string} [o.audio]    готовая дорожка (wav) для подмешивания
+ * @param {string} [o.music]    фоновая музыка (тихо, под голосом)
  * @param {'draft'|'hd'|'fhd'} [o.quality]
  * @param {string} o.out        путь к итоговому mp4
  * @param {number[]} [o.onlyFrames] только эти моменты (сек) в PNG рядом с out
  */
-export async function renderScenario({ scenario, durations, audio, quality = 'hd', out, workers, fps = 30, onProgress, onlyFrames, limitFrames, timeoutMs = 45 * 60 * 1000 }) {
+export async function renderScenario({ scenario, durations, audio, music, quality = 'hd', out, workers, fps = 30, onProgress, onlyFrames, limitFrames, timeoutMs = 45 * 60 * 1000 }) {
   const errors = validateScenario(scenario);
   if (errors.length) throw Object.assign(new Error('Сценарий не прошёл проверку:\n• ' + errors.join('\n• ')), { errors });
 
@@ -118,8 +120,10 @@ export async function renderScenario({ scenario, durations, audio, quality = 'hd
     ff.stdin.end();
     await ffDone;
 
-    if (audio) {
-      await run('ffmpeg', ['-y', '-v', 'error', '-i', silent, '-i', audio, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-af', 'apad', '-t', String(resolved.duration), out]);
+    // музыку можно отключить для отдельного ролика: "music": false в сценарии
+    const bg = scenario.music === false ? null : music;
+    if (audio || bg) {
+      await mixAudio({ video: silent, voice: audio, music: bg, duration: resolved.duration, out });
       fs.rmSync(silent, { force: true });
     } else {
       fs.renameSync(silent, out);

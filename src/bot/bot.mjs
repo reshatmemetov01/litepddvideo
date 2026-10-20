@@ -4,7 +4,7 @@ import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { jobDir, getJob, recentJobs, updateJob, createJob, dataDir } from './store.mjs';
-import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, textForElevenLabs, cloneFromRecording, addLibraryVoice, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
+import { parseScenarioText, describeScenario, VOICE_INSTRUCTION, prepareVoice, prepareTts, ttsChars, textForElevenLabs, musicStatus, setSettings, setCustomMusic, cloneFromRecording, addLibraryVoice, CLONE_GOOD_SECONDS, enqueueRender, queueLength, esc } from './pipeline.mjs';
 import { ttsConfigured, ttsKeySet, getUsage, loadVoices, currentVoice, setActiveVoice, removeVoice } from '../lib/tts.mjs';
 import { AudioSplitError } from '../lib/audio.mjs';
 import { layoutPhrases } from '../lib/timeline.mjs';
@@ -22,7 +22,7 @@ const API_ROOT = process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org';   
 const bot = new Bot(token, { client: { apiRoot: API_ROOT } });
 const state = new Map();   // chatId → { mode: 'scenario' | 'voice', jobId }
 
-const menu = new Keyboard().text('🎬 Создать видео').text('📋 Мои ролики').row().text('🗣 Голоса').text('🧬 Клонировать голос').resized();
+const menu = new Keyboard().text('🎬 Создать видео').text('📋 Мои ролики').row().text('🗣 Голоса').text('🧬 Клонировать голос').row().text('🎵 Музыка').resized();
 const HTML = { parse_mode: 'HTML' };
 
 bot.use(async (ctx, next) => {
@@ -113,6 +113,46 @@ async function acceptClone(ctx, fileId, ext) {
     else if (r.preview) await ctx.replyWithVoice(new InputFile(r.preview), { caption: 'Пробная фраза новым голосом' });
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `⚠️ ${e.message.slice(0, 600)}\n\nМожно прислать другую запись или нажать /clone заново.`);
+  }
+}
+
+// ---- фоновая музыка ----
+function musicView() {
+  const st = musicStatus();
+  const kb = new InlineKeyboard();
+  kb.text(st.on ? '🔇 Выключить музыку' : '🔊 Включить музыку', st.on ? 'mus:off' : 'mus:on').row();
+  kb.text('🎵 Заменить трек', 'mus:new').row();
+  if (st.custom) kb.text('↩️ Вернуть трек по умолчанию', 'mus:default');
+  return { text: `🎵 Фоновая музыка: <b>${st.text}</b>\n\nИграет тихо (примерно на 19 дБ тише голоса), под голосом приглушается ещё сильнее. Паузы тишины внутри трека вырезаются, начало и конец плавные.`, kb };
+}
+async function showMusic(ctx, edit = false) {
+  const { text, kb } = musicView();
+  if (edit) return ctx.editMessageText(text, { ...HTML, reply_markup: kb }).catch(() => ctx.reply(text, { ...HTML, reply_markup: kb }));
+  return ctx.reply(text, { ...HTML, reply_markup: kb });
+}
+bot.command('music', (ctx) => showMusic(ctx));
+bot.hears('🎵 Музыка', (ctx) => showMusic(ctx));
+bot.callbackQuery(/^mus:(on|off|default)$/, async (ctx) => {
+  setSettings({ music: ctx.match[1] === 'off' ? 'off' : ctx.match[1] === 'default' ? 'default' : (musicStatus().custom ? 'custom' : 'default') });
+  await ctx.answerCallbackQuery(ctx.match[1] === 'off' ? 'Музыка выключена' : 'Готово');
+  await showMusic(ctx, true);
+});
+bot.callbackQuery('mus:new', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  state.set(ctx.chat.id, { mode: 'music' });
+  await ctx.reply('🎵 Пришлите трек (mp3 или другой аудиофайл). Лучше без слов: вокал будет мешать озвучке. Он будет играть во всех следующих роликах.', { reply_markup: new InlineKeyboard().text('❌ Отмена', 'cancel') });
+});
+async function acceptMusic(ctx, fileId, ext) {
+  const msg = await ctx.reply('🎵 Загружаю трек…');
+  try {
+    const raw = path.join(dataDir, 'music', `raw${ext}`);
+    fs.mkdirSync(path.dirname(raw), { recursive: true });
+    await download(ctx, fileId, raw);
+    const sec = await setCustomMusic(raw);
+    state.delete(ctx.chat.id);
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `✅ Трек заменён (${Math.round(sec)} с) и включён. Он будет во всех следующих роликах.`);
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, msg.message_id, `⚠️ ${e.message.slice(0, 400)}`);
   }
 }
 
@@ -274,6 +314,7 @@ async function acceptScenario(ctx, text) {
 async function acceptVoice(ctx, fileId, ext) {
   const st = state.get(ctx.chat.id);
   if (st?.mode === 'clone') return acceptClone(ctx, fileId, ext);
+  if (st?.mode === 'music') return acceptMusic(ctx, fileId, ext);
   if (st?.mode !== 'voice') return ctx.reply('Сначала нажмите «🎬 Создать видео» и пришлите сценарий (или выберите ролик в «📋 Мои ролики»).');
   const msg = await ctx.reply('🎧 Обрабатываю голос: убираю шум, режу на фразы…');
   try {

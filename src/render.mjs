@@ -2,10 +2,12 @@
 //                                   [--frames 1,10,20] [--workers 3] [--seconds 5]
 // --preview 540x960 · --hd 720x1280 (по умолчанию) · --fhd 1080x1920
 // --voice   сырая запись голоса: очищается, режется на фразы, видео подгоняется под неё
+// --music файл.mp3 | --no-music   фоновая музыка (по умолчанию assets/music/default.mp3)
 import fs from 'node:fs';
 import path from 'node:path';
 import { renderScenario, root } from './lib/render.mjs';
 import { processRecording } from './lib/audio.mjs';
+import { DEFAULT_MUSIC } from './lib/music.mjs';
 
 const args = process.argv.slice(2);
 const has = (n) => args.includes('--' + n);
@@ -28,6 +30,7 @@ if (val('voice')) {
 const only = val('frames');
 const res = await renderScenario({
   scenario, durations, audio, quality,
+  music: has('no-music') ? undefined : (val('music') ?? DEFAULT_MUSIC),
   out: path.join(root, 'out', name + '.mp4'),
   workers: val('workers') ? +val('workers') : undefined,
   onlyFrames: only ? only.split(',').map(Number) : undefined,

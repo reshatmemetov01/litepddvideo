@@ -20,7 +20,10 @@ for (let i = 0; i < 8; i++) { inputs.push(...burst(i), ...gap); parts.push(`[${i
 const voiceFile = path.join(work, 'voice8.wav');
 execFileSync('ffmpeg', ['-v', 'error', '-y', ...inputs, '-filter_complex', `${parts.join('')}concat=n=16:v=0:a=1,volume=0.5[o]`, '-map', '[o]', '-ar', '44100', voiceFile]);
 
-const files = { doc1: path.join(root, 'ready', 'q13_levo_svetofor.json'), v1: voiceFile, v2: voiceFile };
+const track20 = path.join(work, 'track20.mp3'), track3 = path.join(work, 'track3.mp3');
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=330:d=20', '-c:a', 'libmp3lame', track20]);
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=f=330:d=3', '-c:a', 'libmp3lame', track3]);
+const files = { t20: track20, t3: track3, doc1: path.join(root, 'ready', 'q13_levo_svetofor.json'), v1: voiceFile, v2: voiceFile };
 const calls = [];
 const queue = [];
 let msgId = 100;
@@ -146,6 +149,34 @@ try {
   check(video.size > 100000, `видео отправлено (${(video.size / 1024).toFixed(0)} КБ)`);
   await sleep(1500);
   check(count('sendVideo') === 1, 'видео одно (повторное нажатие не создало второй рендер)');
+
+  console.log('6. Фоновая музыка в готовом видео');
+  const mp4 = fs.readdirSync(path.join(work, 'data', 'jobs')).map((j) => path.join(work, 'data', 'jobs', j, 'draft.mp4')).find((f) => fs.existsSync(f));
+  const streams = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', mp4]).toString();
+  check(streams.includes('audio'), 'в видео есть звук');
+  const dur = parseFloat(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', mp4]).toString());
+  const sdErr = (() => { try { return execFileSync('sh', ['-c', `ffmpeg -hide_banner -ss 2 -t ${dur - 5} -i "${mp4}" -af silencedetect=noise=-55dB:d=0.3 -f null - 2>&1`]).toString(); } catch (e) { return String(e.stdout); } })();
+  check(!/silence_start/.test(sdErr), 'паузы между фразами заполнены тихой музыкой (нет тишины)');
+
+  console.log('7. /music: выключить, заменить трек, вернуть по умолчанию');
+  pushMsg({ text: '🎵 Музыка' });
+  const mv = await waitFor(has('sendMessage', 'Фоновая музыка'), 'экран музыки');
+  check(mv.raw.includes('включена, трек по умолчанию') && mv.raw.includes('mus:off'), 'по умолчанию музыка включена');
+  pushCb('mus:off');
+  await waitFor(has('editMessageText', 'выключена'), 'выключение');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'settings.json'), 'utf8')).music === 'off', 'настройка сохранена: off');
+  pushCb('mus:new');
+  await waitFor(has('sendMessage', 'Пришлите трек'), 'просьба прислать трек');
+  pushMsg({ audio: { file_id: 't3', duration: 3, mime_type: 'audio/mpeg', file_name: 'short.mp3' } });
+  await waitFor(has('editMessageText', 'слишком короткий'), 'отказ на коротком треке');
+  check(true, 'слишком короткий трек отклонён');
+  pushMsg({ audio: { file_id: 't20', duration: 20, mime_type: 'audio/mpeg', file_name: 'my.mp3' } });
+  await waitFor(has('editMessageText', 'Трек заменён'), 'трек заменён');
+  check(fs.existsSync(path.join(work, 'data', 'music', 'custom.mp3')) && JSON.parse(fs.readFileSync(path.join(work, 'data', 'settings.json'), 'utf8')).music === 'custom', 'свой трек сохранён и включён');
+  check(!fs.existsSync(path.join(work, 'data', 'music', 'raw.mp3')), 'исходный файл трека удалён');
+  pushCb('mus:default');
+  await waitFor(has('editMessageText', 'трек по умолчанию'), 'возврат по умолчанию');
+  check(JSON.parse(fs.readFileSync(path.join(work, 'data', 'settings.json'), 'utf8')).music === 'default', 'вернули трек по умолчанию');
 
   const jobsDir = path.join(work, 'data', 'jobs');
   const leftovers = fs.readdirSync(jobsDir).flatMap((j) => (fs.existsSync(path.join(jobsDir, j)) ? fs.readdirSync(path.join(jobsDir, j)) : [])).filter((f) => /^raw\./.test(f));
