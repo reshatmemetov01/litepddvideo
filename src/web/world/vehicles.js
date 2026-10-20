@@ -1,6 +1,8 @@
 // Транспорт: процедурные модели «под реальные» (седан, автобус, грузовик) с анимацией колёс,
 // стоп-сигналами, поворотниками и приседанием кузова. Ось «вперёд» модели — +x, левый борт — −z.
 import * as THREE from 'three';
+import { simplifySubtree } from './assets.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const shadowed = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
 export const CAR_COLORS = { blue: 0x1f4fa8, red: 0xb5161b, white: 0xf1f1ef, black: 0x15171a, yellow: 0xe8b008, green: 0x1e7a46, grey: 0x7d838b, silver: 0xb7bcc2 };
@@ -273,9 +275,80 @@ const AXES = { '+x': [1, 0], '-x': [-1, 0], '+z': [0, 1], '-z': [0, -1] };
  * Машина из готовой модели: разворот носом в +x, масштаб по длине, колёса — на отдельные оси
  * (вращение и поворот), поворотники по углам, стоп-сигналы — материалы по шаблону имён.
  */
+/** Сливает меши поддерева в один меш на материал (в координатах узла space), пропуская skip-поддеревья. */
+function mergeByMaterial(node, space, skip = []) {
+  node.updateMatrixWorld(true);
+  const inv = space.matrixWorld.clone().invert();
+  const groups = new Map();
+  const meshes = [];
+  node.traverse((o) => {
+    if (!o.isMesh || o.isSkinnedMesh || skip.some((w) => w === o || isAncestor(w, o))) return;
+    if (Array.isArray(o.material) || o.geometry.morphAttributes?.position) return;
+    meshes.push(o);
+  });
+  for (const m of meshes) {
+    let g = m.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.normal) g.computeVertexNormals();
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    if (!g.index) g.setIndex([...Array(g.attributes.position.count).keys()]);
+    g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
+    const key = m.material.uuid;
+    if (!groups.has(key)) groups.set(key, { material: m.material, geos: [] });
+    groups.get(key).geos.push(g);
+  }
+  if (meshes.length < 2) return;
+  for (const m of meshes) m.removeFromParent();
+  for (const { material, geos } of groups.values()) {
+    const merged = mergeGeometries(geos, false);
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.name = material.name ?? '';
+    // меш создан в координатах space: вешаем на space и обнуляем его собственный сдвиг
+    space.add(mesh);
+  }
+}
+
+/**
+ * Подготовка модели один раз на файл (копии делят геометрию): упрощение тяжёлых веток
+ * (cfg.simplify: { "шаблон имени": доля }), скрытие лишнего (cfg.hide), простое стекло вместо преломления.
+ */
+export async function prepareVehicleModel(gltf, cfg) {
+  if (gltf.userData.prepared) return;
+  gltf.userData.prepared = true;
+  const root = gltf.scene;
+  if (cfg.hide) { const re = new RegExp(cfg.hide, 'i'); const drop = []; root.traverse((o) => { if (o !== root && re.test(o.name)) drop.push(o); }); drop.forEach((o) => o.removeFromParent()); }
+  for (const [pattern, ratio] of Object.entries(cfg.simplify ?? {})) {
+    const re = new RegExp(pattern, 'i'); const hits = [];
+    root.traverse((o) => { if (re.test(o.name)) hits.push(o); });
+    for (const h of hits) await simplifySubtree(h, ratio);
+  }
+  // сотни мелких деталей → по одному объекту на материал (кузов) и на колесо: у программной
+  // видеокарты каждый вызов отрисовки дорогой, а у моделей с Sketchfab их по 500–700 на машину
+  const wheelRe = new RegExp(cfg.wheels ?? 'wheel|tire|tyre|колес', 'i');
+  root.updateMatrixWorld(true);
+  const wheels = [];
+  root.traverse((o) => { if (o !== root && wheelRe.test(o.name) && !wheels.some((w) => isAncestor(w, o))) wheels.push(o); });
+  for (const w of wheels) mergeByMaterial(w, w);
+  mergeByMaterial(root, root, wheels);
+  // «честное» преломление (transmission) требует лишнего прохода рендера на каждый кадр — заменяем тонировкой
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [o.material].flat()) if (m.transmission > 0) { m.transmission = 0; m.transparent = true; m.opacity = cfg.glassOpacity ?? 0.55; m.depthWrite = false; m.roughness = Math.min(m.roughness, 0.08); }
+  });
+}
+
 export function makeVehicleFromModel(def, cfg, gltf) {
   const src = gltf.scene.clone(true);
-  src.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.castShadow = true; o.receiveShadow = true; } });
+  const paintRe = cfg.paint ? new RegExp(cfg.paint, 'i') : null;
+  const paintColor = def.color !== undefined ? (CAR_COLORS[def.color] ?? col(def.color)) : null;
+  src.traverse((o) => {
+    if (!o.isMesh) return;
+    o.material = o.material.clone();
+    // перекраска кузова под цвет из сценария: одна модель играет разные машины
+    if (paintRe && paintColor !== null && paintRe.test(o.material.name ?? '')) o.material.color.setHex(paintColor);
+    o.castShadow = true; o.receiveShadow = true;
+  });
   src.updateMatrixWorld(true);
   const wheelRe = new RegExp(cfg.wheels ?? 'wheel|tire|tyre|колес', 'i');
   const wheelNodes = [];
@@ -331,14 +404,54 @@ export function makeVehicleFromModel(def, cfg, gltf) {
   const tails = [];
   src.traverse((o) => { if (o.isMesh && lightRe.test(o.material.name ?? '')) { o.material.emissive = new THREE.Color(0xff1a0a); tails.push(o.material); } });
   const tail = { set emissiveIntensity(v) { tails.forEach((m) => (m.emissiveIntensity = v)); } };
-  // поворотники по углам габарита
+  // поворотники: светящиеся вставки поверх родных оранжевых стёкол модели (cfg.blinkers — шаблон материала),
+  // разбитые на 4 угла; если таких материалов нет — по углам кузова
   const blink = { left: [], right: [] };
+  // светящаяся пластина на внешней поверхности фонаря (внутри корпуса её закрыло бы стекло)
+  const lampAt = (b, side, front, scale = 1) => {
+    const size = b.getSize(new THREE.Vector3());
+    const c = b.getCenter(new THREE.Vector3());
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.02, Math.max(0.04, size.y * scale), Math.max(0.06, size.z * scale)),
+      new THREE.MeshStandardMaterial({ color: 0xff8a00, emissive: 0xff8a00, emissiveIntensity: 6 }));
+    m.position.set(front ? b.max.x + 0.012 : b.min.x - 0.012, c.y, c.z);
+    m.visible = false;
+    body.add(m);
+    blink[side].push(m);
+  };
+  const corners = cfg.blinkers ? cornerBoxes(root, new RegExp(cfg.blinkers, 'i')) : new Map();
+  // где своих оранжевых стёкол нет (часто — сзади), мигаем частью стоп-фонаря
+  const tailCorners = cfg.lights ? cornerBoxes(root, new RegExp(cfg.lights, 'i')) : new Map();
+  for (const key of ['fleft', 'fright', 'rleft', 'rright']) {
+    if (corners.has(key)) lampAt(corners.get(key), key.slice(1), key[0] === 'f');
+    else if (tailCorners.has(key)) lampAt(tailCorners.get(key), key.slice(1), key[0] === 'f', 0.45);
+  }
+  if (!blink.left.length || !blink.right.length) {
   const lamp = () => new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.16), new THREE.MeshStandardMaterial({ color: 0xff8a00, emissive: 0xff8a00, emissiveIntensity: 5 }));
   const L = (cfg.length ?? size.x) / 2, Wd = box.max.z, H = box.max.y;
-  for (const [side, sz] of [['left', -1], ['right', 1]]) for (const x of [L - 0.02, -L + 0.02]) {
-    const b = lamp(); b.position.set(x, H * 0.45, sz * (Wd - 0.12)); b.visible = false; body.add(b); blink[side].push(b);
+  for (const [side, sz] of [['left', -1], ['right', 1]]) for (const x of [L - 0.1, -L + 0.1]) {
+    const b = lamp(); b.position.set(x, H * 0.42, sz * (Wd * 0.8)); b.visible = false; body.add(b); blink[side].push(b);
+  }
   }
   root.userData = { body, wheels, radius, tail, blink, length: cfg.length ?? size.x };
   return root;
+}
+/** Габариты вершин мешей с материалом по шаблону re, разбитые по углам: ключи 'fleft', 'rright' и т. п. */
+function cornerBoxes(root, re) {
+  const clusters = new Map();
+  const v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  const inv = root.matrixWorld.clone().invert();
+  root.traverse((o) => {
+    if (!o.isMesh || !re.test(o.material.name ?? '')) return;
+    const pos = o.geometry.attributes.position;
+    const toRoot = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(toRoot);
+      const key = `${v.x > 0 ? 'f' : 'r'}${v.z < 0 ? 'left' : 'right'}`;
+      if (!clusters.has(key)) clusters.set(key, new THREE.Box3());
+      clusters.get(key).expandByPoint(v);
+    }
+  });
+  return clusters;
 }
 function isAncestor(a, o) { for (let p = o.parent; p; p = p.parent) if (p === a) return true; return false; }

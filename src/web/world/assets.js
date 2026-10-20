@@ -83,7 +83,7 @@ export function loadSky(renderer, scene, { id = 'kloofendal_48d_partly_cloudy_pu
 const gltfCache = new Map();
 
 /** Упрощение сетки (meshoptimizer): ratio — доля треугольников, которую оставить. */
-function simplifyScene(root, ratio) {
+export function simplifyScene(root, ratio) {
   root.traverse((o) => {
     if (!o.isMesh || !o.geometry.index) return;
     const g = o.geometry;
@@ -109,4 +109,7 @@ export function loadGltf(url, { simplify } = {}) {
   }
   return gltfCache.get(key);
 }
+/** Упрощение части модели (после загрузки): ждёт готовности meshoptimizer. */
+export async function simplifySubtree(root, ratio) { await MeshoptSimplifier.ready; simplifyScene(root, ratio); }
+
 export const polyHavenModel = (id, res = '1k') => `${EXT}/models/${id}/${id}_${res}.gltf`;

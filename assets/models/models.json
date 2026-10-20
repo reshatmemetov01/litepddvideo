@@ -1,6 +1,45 @@
 {
-  "_comment": "Свои 3D-модели (glTF/GLB). В сценарии: \"model\": \"имя\". length — длина в метрах; forward — куда смотрит нос модели (+x, -x, +z, -z), если не задано — определяется по колёсам front/back. wheels — шаблон имён узлов-колёс (по умолчанию wheel|tire|tyre). lights — шаблон имён материалов стоп-сигналов.",
-  "kenney_sedan": { "file": "kenney/sedan.glb", "length": 4.5, "license": "CC0, Kenney Car Kit" },
-  "kenney_police": { "file": "kenney/police.glb", "length": 4.7, "license": "CC0, Kenney Car Kit" },
-  "kenney_ambulance": { "file": "kenney/ambulance.glb", "length": 5.6, "license": "CC0, Kenney Car Kit" }
+ "_comment": "Свои 3D-модели (glTF/GLB). В сценарии: \"model\": \"имя\". length — длина в метрах; forward — куда смотрит нос модели (+x, -x, +z, -z), если не задано — определяется по колёсам front/back. wheels — шаблон имён узлов-колёс (по умолчанию wheel|tire|tyre). lights — шаблон имён материалов стоп-сигналов. paint — шаблон материала кузова (перекрашивается в color из сценария); simplify — {шаблон узла: доля треугольников}; _defaults.car — модели для легковых без \"model\" (по очереди). blinkers — шаблон материала оранжевых стёкол (поворотники).",
+ "kenney_sedan": {
+  "file": "kenney/sedan.glb",
+  "length": 4.5,
+  "license": "CC0, Kenney Car Kit"
+ },
+ "kenney_police": {
+  "file": "kenney/police.glb",
+  "length": 4.7,
+  "license": "CC0, Kenney Car Kit"
+ },
+ "kenney_ambulance": {
+  "file": "kenney/ambulance.glb",
+  "length": 5.6,
+  "license": "CC0, Kenney Car Kit"
+ },
+ "_defaults": {
+  "car": [
+   "vw_passat",
+   "bmw_m5"
+  ]
+ },
+ "vw_passat": {
+  "file": "cars/vw_passat_2022.glb",
+  "length": 4.87,
+  "wheels": "^Alloy Rims U52 19 (FL|FR|RL|RR)$",
+  "paint": "^CarPaint$",
+  "lights": "^Glow_RED$",
+  "simplify": {
+   "^INTERIOR$": 0.1
+  },
+  "license": "CC-BY-NC-SA-4.0 — НЕКОММЕРЧЕСКАЯ. Ddiaz Design, https://sketchfab.com/3d-models/2022-volkswagen-passat-limited-edition-cfe37bc9a7cf4ac2bf8f989db5353567",
+  "blinkers": "^Ref_Oragne$"
+ },
+ "bmw_m5": {
+  "file": "cars/bmw_m5_2018.glb",
+  "length": 4.98,
+  "wheels": "^3DWheel (Front|Rear) [LR]$",
+  "paint": "^bM_CarPaint_Max1$",
+  "lights": "Red_Low1$",
+  "license": "CC-BY-NC-SA-4.0 — НЕКОММЕРЧЕСКАЯ. Ddiaz Design, https://sketchfab.com/3d-models/2018-bmw-m5-785e6ad50fae4df5a4abb6a39fcc6fcc",
+  "blinkers": "Orange_Low1$"
+ }
 }

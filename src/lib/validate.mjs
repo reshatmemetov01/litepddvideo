@@ -49,7 +49,7 @@ export function validateScenario(s) {
     if (ids.has(o.id)) err(`objects: id «${o.id}» повторяется`);
     ids.add(o.id);
     if (!OBJECT_TYPES.includes(o.type)) err(`объект «${o.id}»: тип «${o.type}» неизвестен (${OBJECT_TYPES.join(', ')})`);
-    if (o.model !== undefined && !(o.model in knownModels())) err(`объект «${o.id}»: модели «${o.model}» нет в assets/models/models.json`);
+    if (o.model !== undefined && o.model !== 'procedural' && !(o.model in knownModels())) err(`объект «${o.id}»: модели «${o.model}» нет в assets/models/models.json`);
     if (!Array.isArray(o.path) || o.path.length < 2) return err(`объект «${o.id}»: в path нужно минимум 2 точки`);
     o.path.forEach((p, i) => {
       if (typeof p.x !== 'number' || typeof p.z !== 'number') err(`объект «${o.id}», точка ${i + 1}: нужны числа x и z`);

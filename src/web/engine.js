@@ -5,13 +5,14 @@ import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { Pass, FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { BokehShader } from 'three/addons/shaders/BokehShader.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadSky, allLoaded, setMaxAnisotropy, loadGltf } from './world/assets.js';
 import { buildCity, groundY } from './world/city.js';
 import { makeSign, makeTrafficLight } from './world/props.js';
-import { makeVehicle, makeVehicleFromModel, animateVehicle } from './world/vehicles.js';
+import { makeVehicle, makeVehicleFromModel, prepareVehicleModel, animateVehicle } from './world/vehicles.js';
 import { makePedestrian, makePedestrianFromModel, animatePedestrian, animateModelPedestrian } from './world/people.js';
 
 // ---------- утилиты ----------
@@ -76,6 +77,32 @@ function makePath(points, defaultHeading = 0) {
   };
 }
 
+// ---------- глубина резкости без повторного рендера сцены ----------
+// Стандартный BokehPass рисует сцену ещё раз ради карты глубины; здесь глубина берётся из
+// основного прохода (depthTexture у буфера композитора) — экономия целого прохода по сцене.
+class DepthBokehPass extends Pass {
+  constructor(camera, { focus = 20, aperture = 0.0001, maxblur = 0.005 } = {}) {
+    super();
+    this.camera = camera;
+    this.uniforms = THREE.UniformsUtils.clone(BokehShader.uniforms);
+    Object.assign(this.uniforms, { focus: { value: focus }, aperture: { value: aperture }, maxblur: { value: maxblur } });
+    this.material = new THREE.ShaderMaterial({
+      defines: { DEPTH_PACKING: 0, PERSPECTIVE_CAMERA: 1 },
+      uniforms: this.uniforms, vertexShader: BokehShader.vertexShader, fragmentShader: BokehShader.fragmentShader,
+    });
+    this.fsQuad = new FullScreenQuad(this.material);
+  }
+  render(renderer, writeBuffer, readBuffer) {
+    this.uniforms.tColor.value = readBuffer.texture;
+    this.uniforms.tDepth.value = readBuffer.depthTexture;
+    this.uniforms.nearClip.value = this.camera.near;
+    this.uniforms.farClip.value = this.camera.far;
+    this.uniforms.aspect.value = this.camera.aspect;
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.fsQuad.render(renderer);
+  }
+}
+
 // ---------- сцена ----------
 /**
  * opts.ss — суперсэмплинг (рендер в ss раз больше и сжатие — гладкие края);
@@ -117,14 +144,19 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
 
   // объекты сценария
   // свои модели: assets/models/models.json, в сценарии "model": "имя"
-  const registry = scenario.objects.some((o) => o.model) ? await (await fetch('/assets/models/models.json')).json() : {};
+  const registry = await (await fetch('/assets/models/models.json')).json();
+  const defaults = registry._defaults ?? {};
   const actors = {};
+  let carIdx = 0;
   for (const [i, o] of scenario.objects.entries()) {
     let mesh;
-    if (o.model) {
-      const cfg = registry[o.model];
-      if (!cfg) throw new Error(`Модели «${o.model}» нет в assets/models/models.json`);
+    // легковые без явной модели получают модели по умолчанию по очереди ("model": "procedural" — самодельная)
+    const modelName = o.model ?? (o.type === 'car' && defaults.car?.length ? defaults.car[carIdx++ % defaults.car.length] : null);
+    if (modelName && modelName !== 'procedural') {
+      const cfg = registry[modelName];
+      if (!cfg) throw new Error(`Модели «${modelName}» нет в assets/models/models.json`);
       const gltf = await loadGltf(`/assets/models/${cfg.file}`);
+      if (o.type !== 'pedestrian') await prepareVehicleModel(gltf, cfg);
       mesh = o.type === 'pedestrian' ? makePedestrianFromModel(o, cfg, gltf) : makeVehicleFromModel(o, cfg, gltf);
     } else mesh = o.type === 'pedestrian' ? makePedestrian(o, i) : makeVehicle(o);
     scene.add(mesh);
@@ -168,7 +200,9 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   }
   let bokeh = null;
   if (post.dof) {
-    bokeh = new BokehPass(scene, camera, { focus: 20, aperture: 0.00008, maxblur: 0.004 });
+    // глубина основного прохода пишется в текстуру — её и читает размытие
+    for (const rt of [composer.renderTarget1, composer.renderTarget2]) rt.depthTexture = new THREE.DepthTexture(rt.width, rt.height);
+    bokeh = new DepthBokehPass(camera, { focus: 20, aperture: 0.00008, maxblur: 0.004 });
     composer.addPass(bokeh);
   }
   if (post.bloom) composer.addPass(new UnrealBloomPass(new THREE.Vector2(width * ss, height * ss), 0.4, 0.45, 2.2));   // светятся только фары, сигналы, светофоры
