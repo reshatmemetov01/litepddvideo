@@ -115,13 +115,26 @@ export function speechText(text, dictionary = {}) {
 
 class TtsError extends Error {}
 
+/** Понятное объяснение ошибки + дословный ответ ElevenLabs (чтобы причина не терялась). */
 function explain(status, body) {
-  const detail = (() => { try { const j = JSON.parse(body); return j.detail?.message ?? j.detail?.status ?? JSON.stringify(j.detail ?? j); } catch { return body.slice(0, 200); } })();
-  if (status === 401) return 'ElevenLabs не принял ключ API (неверный или удалён). Проверьте ELEVENLABS_API_KEY.';
-  if (/quota/i.test(detail) || status === 402) return 'В ElevenLabs закончились символы или тариф не позволяет озвучку. Проверьте подписку.';
-  if (status === 404 || /voice.*not.*found/i.test(detail)) return 'Голос с таким ELEVENLABS_VOICE_ID не найден в аккаунте.';
-  if (status === 422) return `ElevenLabs не принял запрос: ${detail}`;
-  return `ElevenLabs вернул ошибку ${status}: ${detail}`;
+  let code = '', message = '';
+  try {
+    const j = JSON.parse(body);
+    const d = j.detail ?? j;
+    code = typeof d === 'string' ? '' : (d.status ?? d.code ?? '');
+    message = typeof d === 'string' ? d : (d.message ?? JSON.stringify(d));
+  } catch { message = body.slice(0, 300); }
+  const raw = `\n\nОтвет ElevenLabs: ${status}${code ? ` ${code}` : ''}${message ? ` — ${message.slice(0, 300)}` : ''}`;
+  const all = `${code} ${message}`.toLowerCase();
+  let hint;
+  if (/unusual_activity|unusual activity/.test(all)) hint = 'ElevenLabs отключил бесплатный тариф для этого ключа: срабатывает защита от злоупотреблений (часто на серверах и VPN). Помогает платный тариф.';
+  else if (/quota|credits|character_limit/.test(all)) hint = 'В ElevenLabs закончились символы (кредиты) на этот месяц.';
+  else if (/library|free.?(user|tier)|payment_required|subscription|upgrade|paid/.test(all) || status === 402) hint = 'Это действие недоступно на вашем тарифе ElevenLabs (например, голоса из общей библиотеки или клонирование на бесплатном тарифе).';
+  else if (status === 401) hint = 'ElevenLabs не принял ключ API (неверный, удалён или у ключа нет нужных прав).';
+  else if (status === 404 || /voice.*not.*found|voice_not_found/.test(all)) hint = 'Голос не найден в аккаунте.';
+  else if (status === 422) hint = 'ElevenLabs не принял запрос.';
+  else hint = 'ElevenLabs вернул ошибку.';
+  return hint + raw;
 }
 
 async function callTts(text, key, voiceId) {
