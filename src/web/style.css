@@ -7,7 +7,7 @@ html, body { margin: 0; background: #000; }
   background: rgba(14, 22, 48, .88); border: .22em solid #ffd400; border-radius: 1.4em; padding: .55em 1.5em;
   font-weight: 800; font-size: 2.1rem; letter-spacing: .04em; text-transform: uppercase; }
 
-.hook { position: absolute; top: 15rem; left: 5%; right: 5%; text-align: center; font-weight: 800; font-size: 5.4rem; line-height: 1.08;
+.hook { position: absolute; top: 15rem; left: 5%; right: 5%; text-align: center; font-weight: 800; font-size: 4.4rem; line-height: 1.08;
   text-transform: uppercase; text-shadow: 0 .08em 0 #0a1430, 0 0 .5em rgba(0,0,0,.45); -webkit-text-stroke: .06em #0a1430; paint-order: stroke fill; }
 .hook.big { font-size: 7rem; top: 22rem; }
 

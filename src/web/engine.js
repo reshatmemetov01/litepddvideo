@@ -11,7 +11,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadSky, allLoaded, setMaxAnisotropy, loadGltf } from './world/assets.js';
 import { buildCity, groundY } from './world/city.js';
-import { makeSign, makeTrafficLight, preloadSigns } from './world/props.js';
+import { makeSign, makeTrafficLight, preloadSigns, mainDirectionCanvas } from './world/props.js';
 import { makeVehicle, makeVehicleFromModel, prepareVehicleModel, animateVehicle } from './world/vehicles.js';
 import { makePedestrian, makePedestrianFromModel, animatePedestrian, animateModelPedestrian } from './world/people.js';
 
@@ -25,6 +25,40 @@ const lerpAngle = (a, b, u) => {
   if (d < -Math.PI) d += 2 * Math.PI;
   return a + d * u;
 };
+
+// ---------- субтитры ----------
+// Фраза показывается кусками по 2–5 слов (1–2 строки), время куска — пропорционально его длине.
+function captionChunks(v, maxLen = 22) {
+  const words = [];
+  let color = null;
+  for (const raw of v.text.split(/\s+/).filter(Boolean)) {
+    const open = raw.match(/\[(g|r|y)\]/);
+    if (open) color = open[1];
+    const w = raw.replace(/\[\/?(g|r|y)\]/g, '');
+    words.push({ w, color });
+    if (/\[\/(g|r|y)\]/.test(raw)) color = null;
+  }
+  const chunks = [];
+  let cur = [];
+  const len = (c) => c.reduce((s, x) => s + x.w.length + 1, 0);
+  for (const x of words) {
+    if (cur.length && len(cur) + x.w.length > maxLen) { chunks.push(cur); cur = []; }
+    cur.push(x);
+    if (/[.!?…:;—]$/.test(x.w) && len(cur) >= 12) { chunks.push(cur); cur = []; }
+  }
+  if (cur.length) chunks.push(cur);
+  // короткий хвост («автомобиль.») приклеиваем к предыдущему куску
+  if (chunks.length > 1 && len(chunks.at(-1)) < 9 && len(chunks.at(-2)) + len(chunks.at(-1)) <= maxLen + 8) chunks.splice(-2, 2, [...chunks.at(-2), ...chunks.at(-1)]);
+  const total = chunks.reduce((s, c) => s + len(c), 0);
+  const t1 = v.t1 - 0.15;
+  let t = v.t0;
+  return chunks.map((c, i) => {
+    const d = ((t1 - v.t0) * len(c)) / total;
+    const out = { t0: t, t1: i === chunks.length - 1 ? v.t1 : t + d, html: c.map((x) => (x.color ? `<span class="c-${x.color}">${x.w}</span>` : x.w)).join(' ') };
+    t += d;
+    return out;
+  });
+}
 
 // ---------- траектории ----------
 // Таблица с шагом 1/60 с: позиция, курс, пройденный путь, скорость, ускорение, скорость поворота.
@@ -188,6 +222,56 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
     return { r, g };
   });
 
+  // линии траекторий: рисуются постепенно по будущему пути объекта (pathT0…pathT1), со стрелкой на конце
+  const trails = (scenario.trails ?? []).map((tr, k) => {
+    const a = actors[tr.target];
+    const pts = [];
+    for (let t = tr.pathT0; t <= tr.pathT1 + 1e-6; t += 0.04) {
+      const p = a.path.at(t), q = pts.at(-1);
+      if (!q || Math.hypot(p.x - q.x, p.z - q.y) > 0.2) pts.push(new THREE.Vector2(p.x, p.z));
+    }
+    const w = (tr.width ?? 0.9) / 2, y = 0.07 + k * 0.004, n = pts.length;
+    const pos = [], idx = [];
+    pts.forEach((p, i) => {
+      const a0 = pts[Math.max(i - 1, 0)], a1 = pts[Math.min(i + 1, n - 1)];
+      const d = a1.clone().sub(a0).normalize();
+      pos.push(p.x - d.y * w, y, p.y + d.x * w, p.x + d.y * w, y, p.y - d.x * w);
+      if (i < n - 1) idx.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx);
+    const mat = new THREE.MeshBasicMaterial({ color: col(tr.color) ?? 0x4cd964, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
+    const line = new THREE.Mesh(geo, mat); line.renderOrder = 3;
+    // стрелка
+    const end = pts[n - 1], dir = end.clone().sub(pts[Math.max(n - 4, 0)]).normalize();
+    const L = w * 4, Wd = w * 2.6;
+    const ag = new THREE.BufferGeometry();
+    ag.setAttribute('position', new THREE.Float32BufferAttribute([
+      end.x + dir.x * L, y, end.y + dir.y * L,
+      end.x - dir.y * Wd, y, end.y + dir.x * Wd,
+      end.x + dir.y * Wd, y, end.y - dir.x * Wd], 3));
+    const arrow = new THREE.Mesh(ag, mat); arrow.renderOrder = 3;
+    scene.add(line, arrow);
+    return { tr, line, arrow, mat, segs: n - 1 };
+  });
+  // картинка, которая «прилетает» от камеры и ложится на перекрёсток (например, схема таблички 8.13)
+  // в полёте видна табличка целиком, на земле остаётся только схема дорог (белый фон растворяется)
+  const decals = (scenario.decals ?? []).map((dc) => {
+    const mk = (canvas) => {
+      const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }));
+      m.renderOrder = 2;
+      return m;
+    };
+    const m = new THREE.Group();
+    const plate = mk(mainDirectionCanvas(dc.roads)), lines = mk(mainDirectionCanvas(dc.roads, { linesOnly: true, color: dc.lineColor ?? '#ffffff' }));
+    lines.position.y = -0.001;
+    m.add(plate, lines);
+    scene.add(m);
+    return { dc, m, plate, lines };
+  });
+
   const camera = new THREE.PerspectiveCamera(40, width / height, 0.3, 900);
 
   // постобработка
@@ -270,7 +354,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   const tag = el('tag'); tag.textContent = scenario.tag ?? 'ПДД';
   const hooks = (scenario.hooks ?? []).map((h) => { const d = el('hook ' + (h.style ?? '')); d.innerHTML = markup(h.text); return { h, d }; });
   const labels = (scenario.labels ?? []).map((l) => { const d = el('label ' + (l.style ?? '')); d.innerHTML = markup(l.text); return { l, d }; });
-  const captions = (scenario.voiceover ?? []).filter((v) => !v.noCaption).map((v) => { const d = el('caption'); d.innerHTML = markup(v.text); return { v, d }; });
+  const captions = (scenario.voiceover ?? []).filter((v) => !v.noCaption).flatMap((v) => captionChunks(v).map((c) => { const d = el('caption'); d.innerHTML = c.html; return { v: c, d }; }));
   let card = null;
   if (scenario.card?.image) {
     const c = scenario.card;
@@ -326,6 +410,29 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       m.scale.set(sc, sc, sc);
       m.material.opacity = on * 0.9;
     }
+    for (const { tr, line, arrow, mat, segs } of trails) {
+      const on = win(t, tr.t0, tr.t1);
+      const prog = clamp((t - tr.t0) / (tr.draw ?? 1.6), 0, 1);
+      line.visible = on > 0; arrow.visible = on > 0 && prog >= 1;
+      line.geometry.setDrawRange(0, Math.round(smooth(prog) * segs) * 6);
+      mat.opacity = 0.9 * on;
+    }
+    for (const { dc, m, plate, lines } of decals) {
+      const on = win(t, dc.t0, dc.t1);
+      m.visible = on > 0;
+      if (!m.visible) continue;
+      // сначала крупно перед камерой, потом опускается на место и становится полупрозрачной
+      const f = clamp((t - dc.t0) / (dc.fly ?? 2.6), 0, 1);
+      const appear = smooth(clamp(f / 0.25, 0, 1)), land = smooth(clamp((f - 0.4) / 0.6, 0, 1));
+      const C = new THREE.Vector3(dc.pos?.[0] ?? 0, 0.09, dc.pos?.[1] ?? 0);
+      const toC = C.clone().sub(camera.position), D = toC.length();
+      const S = dc.size ?? 16;
+      m.position.copy(camera.position).addScaledVector(toC.normalize(), lerp(0.4 * D, D, land));
+      m.scale.setScalar(lerp(0.17 * D, S, land) * (0.6 + 0.4 * appear));   // в начале — около 60% ширины кадра
+      m.rotation.y = ((dc.rot ?? 0) * Math.PI) / 180;
+      plate.material.opacity = on * appear * (1 - land);
+      lines.material.opacity = on * appear * land * (dc.opacity ?? 0.7);
+    }
     for (const { r, g } of ribbons) {
       const on = win(t, r.t0, r.t1);
       g.visible = on > 0;
@@ -339,7 +446,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
     for (const { h, d } of hooks) vis(d, win(t, h.t0, h.t1));
     // пока на экране карточка вопроса, субтитры опускаются ниже неё
     const cardOn = card ? Math.max(...card.c.windows.map(([a, b]) => win(t, a, b, 0.35))) : 0;
-    for (const { v, d } of captions) { vis(d, win(t, v.t0, v.t1, 0.12)); d.style.transform = `translateY(${cardOn * 13}rem)`; }
+    for (const { v, d } of captions) { vis(d, win(t, v.t0, v.t1, 0.06)); d.style.transform = `translateY(${cardOn * 13}rem)`; }
     for (const { l, d } of labels) {
       const on = win(t, l.t0, l.t1);
       vis(d, on);

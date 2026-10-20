@@ -8,7 +8,7 @@ export const LEAD_IN = 0.35;   // пауза перед первой фразо�
 export const GAP = 0.45;       // пауза между фразами
 export const TAIL = 1.0;       // пауза после последней фразы
 
-const TIME_KEYS = new Set(['t', 't0', 't1', 'reveal']);
+const TIME_KEYS = new Set(['t', 't0', 't1', 'reveal', 'pathT0', 'pathT1']);
 const ANCHOR = /^(?:(end)|p(\d+)(?:\.(start|end))?)([+-]\d+(?:\.\d+)?)?$/;
 
 export const estimateDuration = (text) => Math.max(1.2, text.replace(/\[\/?[gry]\]/g, '').length / 13.5);

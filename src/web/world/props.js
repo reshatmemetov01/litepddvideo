@@ -57,6 +57,26 @@ function signTextures(kind) {
   return signTex.get(kind);
 }
 
+// ---------- табличка 8.13 «Направление главной дороги» по схеме перекрёстка ----------
+// main — два направления главной дороги, minor — второстепенные: 'top' (впереди), 'bottom' (откуда едем), 'left', 'right'
+// linesOnly — только линии дорог на прозрачном фоне (схема, наложенная на перекрёсток)
+export function mainDirectionCanvas({ main = ['top', 'bottom'], minor = [] } = {}, { linesOnly = false, color = '#151515' } = {}) {
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const g = c.getContext('2d');
+  if (!linesOnly) {
+    g.fillStyle = '#151515'; g.beginPath(); g.roundRect(4, 4, 504, 504, 44); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.roundRect(18, 18, 476, 476, 32); g.fill();
+  }
+  const dir = { top: [0, -1], bottom: [0, 1], left: [-1, 0], right: [1, 0] };
+  const edge = (k, r = 238) => [256 + dir[k][0] * r, 256 + dir[k][1] * r];
+  g.strokeStyle = color;
+  g.lineWidth = 14; g.lineCap = 'butt';
+  for (const k of minor) { const [x1, y1] = edge(k), [x2, y2] = edge(k, 44); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); }
+  g.lineWidth = 46; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(...edge(main[0])); g.lineTo(256, 256); g.lineTo(...edge(main[1])); g.stroke();
+  return c;
+}
+
 // ---------- знаки из наборов моделей (sign-catalog.js) ----------
 const packs = {};          // набор → gltf
 const parts = new Map();   // "набор|узел|crop" → подготовленная группа (центр щита в 0, лицом к +z, в единицах набора)
@@ -129,7 +149,15 @@ function makePackSign(def, cat) {
   face.scale.setScalar(k); face.position.set(0, plateY, 0.045);
   g.add(face);
   const fh = face.userData.size.y * k;
-  if (def.plate) {
+  if (def.plate === 'main_direction' && def.plateRoads) {
+    // своя схема главной дороги — рисуем табличку сами
+    const w = 0.7 * ((def.size ?? 0.8) / 0.8);
+    const tex = new THREE.CanvasTexture(mainDirectionCanvas(def.plateRoads)); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+    const face = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45 });
+    const plate = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, w, 0.02), [galv, galv, galv, galv, face, galv]));
+    plate.position.set(0, plateY - fh / 2 - 0.06 - w / 2, 0.06);
+    g.add(plate);
+  } else if (def.plate) {
     const pc = PLATES[def.plate];
     const plate = packPart('urban', pc.node).clone();
     const ph = plate.userData.size.y * k;

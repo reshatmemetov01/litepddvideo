@@ -65,6 +65,17 @@ export function validateScenario(s) {
   (s.highlights ?? []).forEach((h, i) => { needId(h.target, `highlights[${i + 1}]`); checkTime(h.t0, `highlights[${i + 1}].t0`); checkTime(h.t1, `highlights[${i + 1}].t1`); });
   (s.hooks ?? []).forEach((h, i) => { checkTime(h.t0, `hooks[${i + 1}].t0`); checkTime(h.t1, `hooks[${i + 1}].t1`); });
   (s.routes ?? []).forEach((r, i) => { checkTime(r.t0, `routes[${i + 1}].t0`); checkTime(r.t1, `routes[${i + 1}].t1`); });
+  (s.trails ?? []).forEach((r, i) => {
+    const w = `trails[${i + 1}]`;
+    if (typeof r.target !== 'string') err(`${w}: нужен target — id объекта, по чьему пути рисовать линию`);
+    needId(r.target, w);
+    for (const k of ['t0', 't1', 'pathT0', 'pathT1']) checkTime(r[k], `${w}.${k}`);
+  });
+  (s.decals ?? []).forEach((d, i) => {
+    const w = `decals[${i + 1}]`;
+    checkTime(d.t0, `${w}.t0`); checkTime(d.t1, `${w}.t1`);
+    if (!Array.isArray(d.roads?.main) || d.roads.main.length !== 2) err(`${w}.roads.main: два направления главной дороги, например ["top", "right"]`);
+  });
 
   if (!Array.isArray(s.camera) || !s.camera.length) err('camera: нужны ключевые кадры камеры');
   const vec3 = (v) => Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number');
