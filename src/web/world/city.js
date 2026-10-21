@@ -2,6 +2,7 @@
 // Единицы — метры. Дороги: ось x и/или z через (0, 0). Движение правостороннее.
 import * as THREE from 'three';
 import { Tree, LeafType } from '@dgreenheck/ez-tree';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { pbr, uvInMeters, boxUvInMeters, loadGltf, polyHavenModel } from './assets.js';
 
 export const W = 8;            // проезжая часть (2 полосы по 4 м)
@@ -19,6 +20,56 @@ const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
 const shadowed = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
 
 // ---------- материалы (создаются один раз на сцену) ----------
+// Стиль "clean" (по умолчанию) — чистая стилизованная картинка: ровный тёмный асфальт, красная плитка,
+// яркий газон, светлые дома, мультяшные деревья. "real" — фотореализм (текстуры Poly Haven, EZ-Tree).
+function canvasTex(px, draw, metersPerTile) {
+  const c = document.createElement('canvas'); c.width = c.height = px;
+  draw(c.getContext('2d'), px);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(1 / metersPerTile, 1 / metersPerTile);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function makeCleanMaterials() {
+  // плитка тротуара: кирпичики 25×12,5 см вперевязку, мортира светлая (тайл 2×2 м)
+  const bricks = canvasTex(512, (g, n) => {
+    g.fillStyle = '#b39c90'; g.fillRect(0, 0, n, n);
+    const bw = n / 8, bh = n / 16;
+    for (let r = 0; r < 16; r++) for (let c = -1; c < 8; c++) {
+      const x = c * bw + (r % 2 ? bw / 2 : 0), l = 34 + rnd() * 12, h = 6 + rnd() * 6;
+      g.fillStyle = `hsl(${h}, ${36 + rnd() * 10}%, ${l}%)`;
+      g.fillRect(x + 2, r * bh + 2, bw - 4, bh - 4);
+    }
+  }, 2);
+  // асфальт: ровный, с едва заметным зерном (тайл 4×4 м)
+  const asphalt = canvasTex(256, (g, n) => {
+    g.fillStyle = '#3d3f43'; g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 2600; i++) { const v = 52 + rnd() * 18; g.fillStyle = `rgba(${v},${v},${v + 3},0.35)`; g.fillRect(rnd() * n, rnd() * n, 2, 2); }
+  }, 4);
+  const grass = canvasTex(256, (g, n) => {
+    g.fillStyle = '#5cc23d'; g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 900; i++) { g.fillStyle = rnd() < 0.5 ? 'rgba(80,170,50,0.25)' : 'rgba(120,210,80,0.25)'; g.beginPath(); g.arc(rnd() * n, rnd() * n, 3 + rnd() * 8, 0, 7); g.fill(); }
+  }, 6);
+  const matte = (c, r = 0.95) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
+  return {
+    clean: true,
+    asphalt: new THREE.MeshStandardMaterial({ map: asphalt, roughness: 0.92 }),
+    paving: new THREE.MeshStandardMaterial({ map: bricks, roughness: 0.9 }),
+    curb: matte(0xd4d4d0, 0.8),
+    grass: new THREE.MeshStandardMaterial({ map: grass, roughness: 1 }),
+    marking: new THREE.MeshStandardMaterial({ color: 0xf5f5f2, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    markingYellow: new THREE.MeshStandardMaterial({ color: 0xf0bf00, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    plaster: [0xeedcb2, 0xe6d2a4, 0xf2e6c8, 0xe9d7b0].map((c) => matte(c, 0.9)),
+    brick: matte(0xe6d2a4, 0.9),
+    concrete: matte(0xefece4, 0.9),
+    roof: matte(0x8a8d92),
+    frame: matte(0xffffff, 0.6),
+    glass: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.15, metalness: 0.1, envMapIntensity: 1.2 }),
+    balcony: matte(0xf3efe6, 0.85),
+    metal: new THREE.MeshStandardMaterial({ color: 0x8c9096, roughness: 0.5, metalness: 0.5 }),
+    galvanized: new THREE.MeshStandardMaterial({ color: 0xa9adb2, roughness: 0.35, metalness: 0.85 }),
+  };
+}
 function makeMaterials() {
   return {
     asphalt: pbr('asphalt_02', { size: 7, color: 0xb8b8b8 }),
@@ -82,6 +133,7 @@ function sidewalk(scene, M, axis, side, a, b) {
 }
 
 function markings(scene, M, roads, crosswalks) {
+  const zebraDefault = M.clean ? 'white' : 'yellow';
   const inst = new Instances();
   const m4 = new THREE.Matrix4();
   const dash = new THREE.BoxGeometry(1, 0.012, 1);
@@ -107,12 +159,12 @@ function markings(scene, M, roads, crosswalks) {
     const so = crosswalks.length ? 9.6 : W / 2 + 0.8;
     put(2, so, 4, 0.4); put(-2, -so, 4, 0.4); put(so, -2, 0.4, 4); put(-so, 2, 0.4, 4);
   }
-  // зебры: белые полосы 0,5 м с шагом 1 м, длиной 4 м по ходу движения; между ними жёлтые (как в городах РФ),
-  // style: "white" — только белые
+  // зебры: белые полосы 0,5 м с шагом 1 м, длиной 4 м по ходу движения; style: "yellow" — между ними жёлтые
+  // (как во многих городах РФ, по умолчанию в стиле real), "white" — только белые (по умолчанию в стиле clean)
   for (const c of crosswalks) {
-    const { road, at, style } = typeof c === 'number' ? { road: 'z', at: c } : c;
+    const { road, at, style = zebraDefault } = typeof c === 'number' ? { road: 'z', at: c } : c;
     for (let i = -3.5; i <= 3.5; i += 1) road === 'z' ? put(i, at, 0.5, 4) : put(at, i, 4, 0.5);
-    if (style !== 'white') for (let i = -3; i <= 3; i += 1) road === 'z' ? put(i, at, 0.4, 4, true) : put(at, i, 4, 0.4, true);
+    if (style === 'yellow') for (let i = -3; i <= 3; i += 1) road === 'z' ? put(i, at, 0.4, 4, true) : put(at, i, 4, 0.4, true);
   }
   inst.flush(scene);
 }
@@ -176,6 +228,7 @@ const FLOOR = 2.8, PLINTH = 0.7;
 const winGeo = { frame: new THREE.BoxGeometry(1.5, 1.55, 0.1), glass: new THREE.BoxGeometry(1.3, 1.35, 0.04), sill: new THREE.BoxGeometry(1.6, 0.06, 0.22) };
 const balGeo = { slab: new THREE.BoxGeometry(3.0, 0.16, 1.1), front: new THREE.BoxGeometry(3.0, 1.0, 0.08), side: new THREE.BoxGeometry(0.08, 1.0, 1.1) };
 const GLASS_TINTS = [0x1b2430, 0x22303b, 0x2a2f36, 0x3a4a55, 0x1f2a24, 0x4b5560];
+const GLASS_CLEAN = [0x3a4b5e, 0x34455a, 0x415468];
 
 /**
  * Типовой панельный дом. (cx, cz) — центр, len — длина вдоль фасада, depth — глубина,
@@ -216,7 +269,7 @@ function panelHouse(scene, M, inst, { cx, cz, len, depth = 12, floors = 5, rotY 
       for (let c = 0; c < cols; c++) {
         const x = -len / 2 + step * (c + 0.5);
         place(x, y, zf + side * 0.03, ry, 'frame', winGeo.frame, M.frame);
-        place(x, y, zf + side * 0.085, ry, 'glass', winGeo.glass, M.glass, pick(GLASS_TINTS));
+        place(x, y, zf + side * 0.085, ry, 'glass', winGeo.glass, M.glass, pick(M.clean ? GLASS_CLEAN : GLASS_TINTS));
         place(x, y - 0.8, zf + side * 0.1, ry, 'sill', winGeo.sill, M.frame);
         // балконы на уличном фасаде через колонку, начиная со 2-го этажа
         if (balconies && side > 0 && f > 0 && c % 3 === 1) {
@@ -235,7 +288,7 @@ function panelHouse(scene, M, inst, { cx, cz, len, depth = 12, floors = 5, rotY 
       const y = PLINTH + f * FLOOR + 1.55;
       for (const z of [-depth / 4, depth / 4]) {
         place(xf + side * 0.03, y, z, ry, 'frame', winGeo.frame, M.frame);
-        place(xf + side * 0.085, y, z, ry, 'glass', winGeo.glass, M.glass, pick(GLASS_TINTS));
+        place(xf + side * 0.085, y, z, ry, 'glass', winGeo.glass, M.glass, pick(M.clean ? GLASS_CLEAN : GLASS_TINTS));
       }
     }
   }
@@ -255,6 +308,36 @@ function makeTreeVariants() {
     return { tree: t, height: box.max.y - box.min.y };
   }));
 }
+// мультяшные деревья для стиля clean: ствол и крона из нескольких «шаров» (низкополигональные, гранёные)
+const CROWN = [0x9fd062, 0x8cc451, 0xa9d873, 0x94c95a];
+function makeCartoonTreeVariants() {
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8e6d4f, roughness: 0.9 });
+  return CROWN.map((color, i) => {
+    const g = new THREE.Group();
+    const trunkH = 2.4 + i * 0.2;
+    g.add(shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, trunkH + 1, 8).translate(0, (trunkH + 1) / 2, 0), trunkMat)));
+    const blobs = [];
+    const n = 5 + (i % 3);
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * Math.PI * 2 + i, r = k === 0 ? 0 : 0.9 + rnd() * 0.4;
+      const R = k === 0 ? 1.9 : 1.15 + rnd() * 0.5;
+      blobs.push(new THREE.IcosahedronGeometry(R, 1).translate(Math.cos(a) * r, trunkH + 1.6 + (k === 0 ? 0.4 : rnd() * 1.2 - 0.3), Math.sin(a) * r));
+    }
+    blobs.push(new THREE.IcosahedronGeometry(1.3, 1).translate(0.2, trunkH + 3.1, -0.1));
+    g.add(shadowed(new THREE.Mesh(mergeGeometries(blobs), new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true }))));
+    const box = new THREE.Box3().setFromObject(g);
+    return { tree: Object.assign(g, { update() {} }), height: box.max.y - box.min.y };
+  });
+}
+function cartoonBush(M, x, z) {
+  const blobs = [];
+  for (let k = 0; k < 3; k++) blobs.push(new THREE.IcosahedronGeometry(0.55 + rnd() * 0.3, 1).translate((k - 1) * 0.6, 0.45 + rnd() * 0.2, rnd() * 0.4 - 0.2));
+  M.bush ??= new THREE.MeshStandardMaterial({ color: 0x6fb543, roughness: 0.9, flatShading: true });
+  const m = shadowed(new THREE.Mesh(mergeGeometries(blobs), M.bush));
+  m.position.set(x, KERB_H, z); m.rotation.y = rnd() * 6.28;
+  return m;
+}
+
 function placeTree(scene, variants, trees, x, z, height = 8 + rnd() * 4) {
   const v = pick(variants);
   const t = v.tree.clone();
@@ -286,7 +369,8 @@ function placeLamp(scene, proto, x, z, towardRoadAngle) {
 }
 
 // ---------- мелочи Poly Haven: кусты, гидранты, скамейки ----------
-async function scatterProps(scene, spots) {
+async function scatterProps(scene, spots, M) {
+  if (M.clean) { for (const p of spots.shrubs) scene.add(cartoonBush(M, p[0], p[1])); spots.shrubs = []; }
   // фотосканы Poly Haven тяжёлые (куст ~156 тыс. треугольников) — упрощаем при загрузке
   const simplify = { shrub_01: 0.08, fire_hydrant: 0.15, painted_wooden_bench: 1 };
   const [shrub, hydrant, bench] = await Promise.all(Object.entries(simplify).map(([id, r]) => loadGltf(polyHavenModel(id), { simplify: r }).catch(() => null)));
@@ -300,13 +384,14 @@ async function scatterProps(scene, spots) {
 /** Строит всё окружение. variants — исходные деревья: их материалы общие с копиями (ветер). */
 export async function buildCity(scene, scenario) {
   reseed(7);
-  const M = makeMaterials();
+  const clean = (scenario.scene.style ?? 'clean') === 'clean';
+  const M = clean ? makeCleanMaterials() : makeMaterials();
   const roads = scenario.scene.roads ?? ['x', 'z'];
   const crosswalks = scenario.scene.crosswalks ?? [];
   buildRoads(scene, M, roads, crosswalks, scenario.scene.tram);
 
   const inst = new Instances();
-  const variants = makeTreeVariants();
+  const variants = clean ? makeCartoonTreeVariants() : makeTreeVariants();
   const trees = [];
   const lampProto = makeLamp(M);
   const spots = { shrubs: [], hydrants: [], benches: [] };
@@ -323,7 +408,8 @@ export async function buildCity(scene, scenario) {
         if (Math.abs(s) < clearZone + 2) continue;
         if (!hasX || !hasZ ? (scenario.scene.crosswalks ?? []).some((c) => Math.abs(s - (typeof c === 'number' ? c : c.at)) < 5) : false) continue;
         const off = side * (treeLine + rnd() * 0.8);
-        axis === 'x' ? placeTree(scene, variants, trees, s, off) : placeTree(scene, variants, trees, off, s);
+        const th = clean ? 6.5 + rnd() * 2 : undefined;
+        axis === 'x' ? placeTree(scene, variants, trees, s, off, th) : placeTree(scene, variants, trees, off, s, th);
       }
       for (let s = -FAR + 15; s < FAR; s += 32) {
         if (Math.abs(s) < clearZone) continue;
@@ -368,9 +454,9 @@ export async function buildCity(scene, scenario) {
     if ((hasX && Math.abs(cz) < 30) || (hasZ && Math.abs(cx) < 30)) continue;   // не ставим на дорогу
     houses.push({ cx, cz, len: 50 + rnd() * 20, rotY: -a - Math.PI / 2, floors: rnd() < 0.6 ? 9 : 12, balconies: false });   // фасадом к центру
   }
-  for (const h of houses) panelHouse(scene, M, inst, h);
+  for (const h of houses) panelHouse(scene, M, inst, clean ? { ...h, balconies: false, brick: false } : h);
   inst.flush(scene);
-  await scatterProps(scene, spots);
+  await scatterProps(scene, spots, M);
   window.__cityStats = { trees: trees.length, treeTris: variants.map((v) => v.tree.triangleCount), houses: houses.length };   // для замеров
   return { trees, variants, materials: M };
 }

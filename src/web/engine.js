@@ -153,23 +153,34 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  const clean = (scenario.scene.style ?? 'clean') === 'clean';
+  // clean: нейтральная тонокоррекция сохраняет яркие цвета (газон, плитка); real — киношная ACES
+  renderer.toneMapping = clean ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = scenario.scene.exposure ?? 1.0;
   renderer.info.autoReset = false;
   setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0xc4d2dc, 140, 420);
+  scene.fog = clean ? new THREE.Fog(0xd6e6f2, 160, 480) : new THREE.Fog(0xc4d2dc, 140, 420);
   const sunDir = new THREE.Vector3(-0.55, 0.62, 0.42).normalize();   // утреннее солнце, тени ложатся наискосок
-  loadSky(renderer, scene, { intensity: 0.85, rotation: scenario.scene.skyRotation ?? 0 });
-  const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
+  loadSky(renderer, scene, { intensity: clean ? 0.7 : 0.85, rotation: scenario.scene.skyRotation ?? 0 }).then(() => {
+    if (!clean) return;
+    // ровное голубое небо вместо фото облаков (HDRI остаётся источником освещения)
+    const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+    const g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, '#5d9ee0'); gr.addColorStop(0.42, '#9cc7ee'); gr.addColorStop(0.5, '#dbeaf6'); gr.addColorStop(1, '#dbeaf6');
+    g.fillStyle = gr; g.fillRect(0, 0, 4, 256);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = t; scene.backgroundIntensity = 1;
+  });
+  const sun = new THREE.DirectionalLight(0xfff4e6, clean ? 2.4 : 2.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
   const S = 46;
   Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 400 });
   sun.shadow.bias = -0.00025; sun.shadow.normalBias = 0.03; sun.shadow.radius = 3;
   scene.add(sun, sun.target);
-  scene.add(new THREE.HemisphereLight(0xdfe8f2, 0x6d6b62, 0.25));
+  scene.add(clean ? new THREE.HemisphereLight(0xe4efff, 0x8a9a7a, 0.7) : new THREE.HemisphereLight(0xdfe8f2, 0x6d6b62, 0.25));
 
   const roads = scenario.scene.roads ?? ['x', 'z'];
   const city = await buildCity(scene, scenario);
@@ -353,7 +364,8 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
 
   const tag = el('tag'); tag.textContent = scenario.tag ?? 'ПДД';
   const hooks = (scenario.hooks ?? []).map((h) => { const d = el('hook ' + (h.style ?? '')); d.innerHTML = markup(h.text); return { h, d }; });
-  const labels = (scenario.labels ?? []).map((l) => { const d = el('label ' + (l.style ?? '')); d.innerHTML = markup(l.text); return { l, d }; });
+  // sub — мелкая строка над подписью («толстая» над «ГЛАВНАЯ»)
+  const labels = (scenario.labels ?? []).map((l) => { const d = el('label ' + (l.style ?? '')); d.innerHTML = (l.sub ? `<small>${markup(l.sub)}</small>` : '') + markup(l.text); return { l, d }; });
   const captions = (scenario.voiceover ?? []).filter((v) => !v.noCaption).flatMap((v) => captionChunks(v).map((c) => { const d = el('caption'); d.innerHTML = c.html; return { v: c, d }; }));
   let card = null;
   if (scenario.card?.image) {
@@ -460,7 +472,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
         const half = d.offsetWidth / 2 + width * 0.02;
         const x = clamp(s.x, half, width - half);
         const y = clamp(s.y, height * 0.2, height * 0.8);   // не залезать на плашку сверху
-        d.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%) scale(${0.85 + 0.15 * on})`;
+        d.style.transform = `translate(${x}px, ${y}px) translate(-50%, calc(-100% - 1.15em)) scale(${0.85 + 0.15 * on})`;   // точка на конце «ножки» — над объектом
       }
     }
     if (card) {
