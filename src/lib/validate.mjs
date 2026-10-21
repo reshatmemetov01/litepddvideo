@@ -68,7 +68,8 @@ export function validateScenario(s) {
   (s.routes ?? []).forEach((r, i) => { checkTime(r.t0, `routes[${i + 1}].t0`); checkTime(r.t1, `routes[${i + 1}].t1`); });
   (s.trails ?? []).forEach((r, i) => {
     const w = `trails[${i + 1}]`;
-    if (typeof r.target !== 'string') err(`${w}: нужен target — id объекта, по чьему пути рисовать линию`);
+    if (Array.isArray(r.points)) { if (r.points.length < 2) err(`${w}.points: нужно минимум 2 точки [x, z]`); for (const k of ['t0', 't1']) checkTime(r[k], `${w}.${k}`); return; }
+    if (typeof r.target !== 'string') err(`${w}: нужен target — id объекта, по чьему пути рисовать линию, или points`);
     needId(r.target, w);
     for (const k of ['t0', 't1', 'pathT0', 'pathT1']) checkTime(r[k], `${w}.${k}`);
   });
@@ -84,6 +85,7 @@ export function validateScenario(s) {
     checkTime(a.t0, `${w}.t0`); checkTime(a.t1, `${w}.t1`);
   });
   (s.crosswalkHighlights ?? []).forEach((c, i) => { checkTime(c.t0, `crosswalkHighlights[${i + 1}].t0`); checkTime(c.t1, `crosswalkHighlights[${i + 1}].t1`); });
+  (s.signHighlights ?? []).forEach((h, i) => { if (!(s.scene?.signs ?? [])[h.sign ?? 0]) err(`signHighlights[${i + 1}]: знака №${h.sign ?? 0} нет (нумерация с 0)`); checkTime(h.t0, `signHighlights[${i + 1}].t0`); checkTime(h.t1, `signHighlights[${i + 1}].t1`); });
   (s.promo ?? []).forEach((p, i) => { if (!p.text) err(`promo[${i + 1}]: нужен text`); checkTime(p.t0, `promo[${i + 1}].t0`); checkTime(p.t1, `promo[${i + 1}].t1`); });
   if (s.card?.summary) { const c = s.card.summary; if (!c.answer) err('card.summary.answer: строка ответа'); checkTime(c.t0, 'card.summary.t0'); checkTime(c.t1, 'card.summary.t1'); }
   (s.decals ?? []).forEach((d, i) => {

@@ -106,7 +106,7 @@ npm run render -- scenarios/q13_levo_svetofor.json --range 15-27            # к
 | `scene.roads` | `["x","z"]` перекрёсток · `["z"]` одна дорога · `scene.crosswalks`: `z` зебр |
 | `scene.crosswalks` | число: зебра через дорогу вдоль z на этой координате; или `{road: "x"\|"z", at: число}` (на перекрёстке с зебрами стоп-линии отодвигаются) |
 | `scene.lights` | светофоры: `{pos: [x, z], rot, state: "red"\|"yellow"\|"green"\|"off"}` |
-| `trails` | линия траектории, рисуется постепенно по будущему пути объекта: `{ "target": "truck", "pathT0": "p8", "pathT1": "p8+5", "t0": "p7", "t1": "p7.end", "color": "0x34d058", "draw": 1.8, "width": 1.1 }` |
+| `trails` | линия, рисуется постепенно: по точкам `"points": [[x, z], ...]` (например, главная дорога) или по будущему пути объекта: `{ "target": "truck", "pathT0": "p8", "pathT1": "p8+5", "t0": "p7", "t1": "p7.end", "color": "0x34d058", "draw": 1.8, "width": 1.1 }` |
 | `decals` | схема таблички 8.13 «прилетает» к камере и ложится на перекрёсток: `{ "roads": { "main": ["top", "right"], "minor": ["bottom", "left"] }, "t0": "p6", "t1": "p7.end", "fly": 2.6, "size": 26, "opacity": 0.5 }` (top — впереди, bottom — откуда едем) |
 | `card.notes` | плашки под карточкой вопроса: `[{ "text": "Пиши в [y]комментариях[/y]", "t0": "p2", "t1": "p2.end" }]` |
 | `scene.style` | `"clean"` (по умолчанию) — чистая стилизованная картинка: ровный асфальт, красная плитка, яркий газон, мультяшные деревья, светлые дома; `"city"` — серая плитка, жёлтые дома, светлый асфальт; `"real"` — фотореализм (текстуры Poly Haven, процедурные деревья) |
@@ -117,6 +117,7 @@ npm run render -- scenarios/q13_levo_svetofor.json --range 15-27            # к
 | `crosswalkHighlights` | подсветка зебры: `[{ "road": "z", "at": 0, "color": "0xb6f23a", "t0": …, "t1": … }]` |
 | `card.summary` | карточка-итог в одну строку ответа: `{ "t0": "p7", "t1": "p7.end", "title": "Билет 34, вопрос 12", "question": "…", "answer": "3. Автомобилей А и В." }` |
 | `promo` | плашка Telegram-канала: `[{ "text": "@litepdd", "t0": …, "t1": …, "pos": "top" | "bottom" }]` |
+| `signHighlights` | знак или табличка под ним «подмигивает»: `[{ "sign": 0, "part": "sign" | "plate", "t0": …, "t1": … }]` (номер знака в `scene.signs`, с 0) |
 | `scene.signs` | `type` — знак из каталога `src/web/world/sign-catalog.js` (около 40 знаков ПДД: `main_road`, `end_main_road`, `yield`, `stop`, `ped_crossing`, `no_left`, `no_entry`, `one_way`, `bus_stop`…); `pos: [x, z]`; `rot`; `size` (диаметр круглого знака, по умолчанию 0,8 м); `plate` — табличка под знаком (`main_direction` — 8.13, `zone_100`, `truck`…), `plateFlip: true` — отразить; `plateRoads: { "main": ["top", "right"], "minor": ["bottom", "left"] }` — табличка 8.13 с любой схемой главной дороги |
 | `objects` | `type`: `car`, `bus`, `truck`, `pedestrian`; `model` — своя 3D-модель (раздел выше); `color`; `path`: точки `{t, x, z, ease?, ctrl?}` (`ctrl` изгибает отрезок: поворот); `heading` (градусы) для стоящих; `appear: true` — виден только во время движения; `blinker: {side, t0, t1}` — поворотник |
 | `highlights`, `routes` | кольцо вокруг объекта · подсвеченная линия на земле |

@@ -187,7 +187,12 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   const city = await buildCity(scene, scenario);
   (scenario.scene.lights ?? []).forEach((l) => scene.add(makeTrafficLight(l)));
   await preloadSigns(scenario.scene.signs);
-  (scenario.scene.signs ?? []).forEach((s) => scene.add(makeSign(s)));
+  const signs = (scenario.scene.signs ?? []).map((s) => { const g = makeSign(s); scene.add(g); return g; });
+  // «подмигивание» знака или таблички под ним: { sign: номер знака с 0, part: "sign" | "plate", t0, t1 }
+  const signBlinks = (scenario.signHighlights ?? []).map((h) => {
+    const g = signs[h.sign ?? 0], part = h.part === 'plate' ? g?.userData.plate : g?.userData.face;
+    return part ? { h, part, base: part.scale.clone() } : null;
+  }).filter(Boolean);
 
   // объекты сценария
   // свои модели: assets/models/models.json, в сценарии "model": "имя"
@@ -237,11 +242,15 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
 
   // линии траекторий: рисуются постепенно по будущему пути объекта (pathT0…pathT1), со стрелкой на конце
   const trails = (scenario.trails ?? []).map((tr, k) => {
-    const a = actors[tr.target];
+    // линия либо по будущему пути объекта (target + pathT0…pathT1), либо по точкам (points: [[x, z], ...])
     const pts = [];
-    for (let t = tr.pathT0; t <= tr.pathT1 + 1e-6; t += 0.04) {
-      const p = a.path.at(t), q = pts.at(-1);
-      if (!q || Math.hypot(p.x - q.x, p.z - q.y) > 0.2) pts.push(new THREE.Vector2(p.x, p.z));
+    if (tr.points) for (const [x, z] of tr.points) pts.push(new THREE.Vector2(x, z));
+    else {
+      const a = actors[tr.target];
+      for (let t = tr.pathT0; t <= tr.pathT1 + 1e-6; t += 0.04) {
+        const p = a.path.at(t), q = pts.at(-1);
+        if (!q || Math.hypot(p.x - q.x, p.z - q.y) > 0.2) pts.push(new THREE.Vector2(p.x, p.z));
+      }
     }
     const w = (tr.width ?? 0.9) / 2, y = 0.07 + k * 0.004, n = pts.length;
     const pos = [], idx = [];
@@ -439,6 +448,11 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       m.material.opacity = on * 0.9;
     }
     notes.update(t, win);
+    for (const { part, base } of signBlinks) part.scale.copy(base);
+    for (const { h, part, base } of signBlinks) {
+      const on = win(t, h.t0, h.t1, 0.2);
+      if (on > 0) part.scale.copy(base).multiplyScalar(1 + 0.18 * on * Math.abs(Math.sin((t - h.t0) * 5)));
+    }
     for (const { tr, line, arrow, mat, segs } of trails) {
       const on = win(t, tr.t0, tr.t1);
       const prog = clamp((t - tr.t0) / (tr.draw ?? 1.6), 0, 1);

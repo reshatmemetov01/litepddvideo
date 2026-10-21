@@ -148,6 +148,7 @@ function makePackSign(def, cat) {
   const face = packPart(cat.pack ?? 'urban', cat.node, cat.crop).clone();
   face.scale.setScalar(k); face.position.set(0, plateY, 0.045);
   g.add(face);
+  g.userData.face = face;
   const fh = face.userData.size.y * k;
   if (def.plate === 'main_direction' && def.plateRoads) {
     // своя схема главной дороги — рисуем табличку сами
@@ -157,6 +158,7 @@ function makePackSign(def, cat) {
     const plate = shadowed(new THREE.Mesh(new THREE.BoxGeometry(w, w, 0.02), [galv, galv, galv, galv, face, galv]));
     plate.position.set(0, plateY - fh / 2 - 0.06 - w / 2, 0.06);
     g.add(plate);
+    g.userData.plate = plate;
   } else if (def.plate) {
     const pc = PLATES[def.plate];
     const plate = packPart('urban', pc.node).clone();
@@ -164,6 +166,7 @@ function makePackSign(def, cat) {
     plate.scale.set(def.plateFlip ? -k : k, k, k);
     plate.position.set(0, plateY - fh / 2 - 0.06 - ph / 2, 0.045);
     g.add(plate);
+    g.userData.plate = plate;
   }
   const top = plateY + fh / 2 + 0.05;
   const pole = shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.038, top, 12), galv));

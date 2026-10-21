@@ -72,7 +72,8 @@
   "wheelSplit": "koleso",
   "simplify": {
    "^Collada visual scene group$": 0.5
-  }
+  },
+  "paint": "^Color_F06$"
  },
  "tram_ktm5": {
   "file": "trams/ktm5_71-605.glb",
