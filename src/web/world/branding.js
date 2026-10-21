@@ -81,7 +81,7 @@ function randomPlate(seedText) {
 
 export function addBranding(root, body, def, cfg, size) {
   // номер по умолчанию — случайный российский; "plate": false — оставить номер модели
-  if (def.plate === undefined && def.type !== 'tram') def = { ...def, plate: randomPlate(String(def.id ?? '')) };
+  if (def.plate === undefined && !['tram', 'moto'].includes(def.type)) def = { ...def, plate: randomPlate(String(def.id ?? '')) };   // у мотоцикла номер маленький и только сзади — не ставим
   if (!def.plate && !def.sticker) return;
   root.updateMatrixWorld(true);
   const parts = [];

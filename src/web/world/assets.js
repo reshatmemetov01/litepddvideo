@@ -3,10 +3,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { MeshoptSimplifier } from 'meshoptimizer/meshopt_simplifier.module.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 const EXT = '/assets/ext';
 const texLoader = new THREE.TextureLoader();
-const gltfLoader = new GLTFLoader();
+const gltfLoader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);   // сжатые модели (gltf-transform meshopt)
 const pending = [];
 const track = (p) => { pending.push(p); return p; };
 /** Ждёт загрузки всех текстур и моделей (рендер кадров начинается только после неё). */

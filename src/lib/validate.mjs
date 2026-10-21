@@ -8,7 +8,7 @@ import { SIGNS, PLATES } from '../web/world/sign-catalog.js';
 const MODELS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets', 'models', 'models.json');
 const knownModels = () => { try { return JSON.parse(fs.readFileSync(MODELS, 'utf8')); } catch { return {}; } };
 
-const OBJECT_TYPES = ['car', 'bus', 'truck', 'tram', 'pedestrian'];
+const OBJECT_TYPES = ['car', 'bus', 'truck', 'tram', 'moto', 'pedestrian'];
 const LIGHT_STATES = ['red', 'yellow', 'green', 'off'];
 const SIGN_TYPES = Object.keys(SIGNS);
 const ROADS = [['x', 'z'], ['z'], ['x']];

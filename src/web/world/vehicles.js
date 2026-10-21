@@ -258,7 +258,9 @@ export function animateVehicle(v, def, t, kin) {
   }
   // кузов: клюёт носом при торможении, приседает назад при разгоне, кренится в повороте
   ud.body.rotation.z = THREE.MathUtils.clamp(kin.accel * 0.006, -0.025, 0.025);
-  ud.body.rotation.x = THREE.MathUtils.clamp(-kin.yawRate * kin.speed * 0.004, -0.03, 0.03);
+  ud.body.rotation.x = def.type === 'moto'
+    ? THREE.MathUtils.clamp(Math.atan((kin.yawRate * kin.speed) / 9.8), -0.5, 0.5)   // мотоцикл наклоняется внутрь поворота
+    : THREE.MathUtils.clamp(-kin.yawRate * kin.speed * 0.004, -0.03, 0.03);
   // стоп-сигналы: при торможении и на месте
   const braking = kin.accel < -0.3 || kin.speed < 0.3;
   ud.tail.emissiveIntensity = braking ? 5 : 0.6;
@@ -282,10 +284,18 @@ const AXES = { '+x': [1, 0], '-x': [-1, 0], '+z': [0, 1], '-z': [0, -1] };
  * (шины, гайки). Радиус = высота центра над землёй. Колёса становятся группами «__wheel_N».
  */
 function splitWheels(root, cfg) {
-  const re = new RegExp(cfg.wheelSplit, 'i');
   const fwd = { '+x': 'x', '-x': 'x', '+z': 'z', '-z': 'z' }[cfg.forward ?? '+x'];
   const lat = fwd === 'x' ? 'z' : 'x';
   root.updateMatrixWorld(true);
+  // явные центры колёс (для моделей из одного материала, например мотоцикл с седоком):
+  // { centers: [[вдоль, высота, поперёк?], ...], r, half, inner } в координатах модели;
+  // inner — доля радиуса: внутри неё (ступица, вилка) треугольники остаются кузову
+  if (typeof cfg.wheelSplit === 'object') {
+    const ws = cfg.wheelSplit;
+    const wheels = ws.centers.map(([f, y, l = 0]) => { const c = new THREE.Vector3(); c[fwd] = f; c.y = y; c[lat] = l; return { c, r: ws.r, half: ws.half ?? ws.r * 0.4, inner: ws.inner ?? 0, tris: new Map() }; });
+    return cutWheels(root, wheels, fwd, lat);
+  }
+  const re = new RegExp(cfg.wheelSplit, 'i');
   const box = new THREE.Box3().setFromObject(root);
   const mid = box.getCenter(new THREE.Vector3());
   const v = new THREE.Vector3();
@@ -309,10 +319,14 @@ function splitWheels(root, cfg) {
     const c = b.getCenter(new THREE.Vector3());
     const r = c.y - box.min.y;
     // шина касается земли: радиус = высота центра; поперёк — ширина диска с небольшим запасом (без арки кузова)
-    wheels.push({ c, r: r * 0.99, half: (b.max[lat] - b.min[lat]) / 2 + r * 0.08, tris: new Map() });
+    wheels.push({ c, r: r * 0.99, half: (b.max[lat] - b.min[lat]) / 2 + r * 0.08, inner: 0, tris: new Map() });
   }
-  // 2) треугольники внутри цилиндра колеса уходят в колесо
-  const inside = (p, w) => Math.hypot(p[fwd] - w.c[fwd], p.y - w.c.y) < w.r && Math.abs(p[lat] - w.c[lat]) < w.half;
+  cutWheels(root, wheels, fwd, lat);
+}
+
+/** Треугольники внутри цилиндра колеса (и снаружи его внутреннего радиуса) уходят в группу «__wheel_N». */
+function cutWheels(root, wheels, fwd, lat) {
+  const inside = (p, w) => { const d = Math.hypot(p[fwd] - w.c[fwd], p.y - w.c.y); return d < w.r && d >= w.inner * w.r && Math.abs(p[lat] - w.c[lat]) < w.half; };
   const meshes = [];
   root.traverse((o) => { if (o.isMesh && !Array.isArray(o.material)) meshes.push(o); });
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
@@ -410,6 +424,10 @@ export async function prepareVehicleModel(gltf, cfg) {
     for (const w of wheels) mergeByMaterial(w, w);
     mergeByMaterial(root, root, wheels);
   }
+  // модель без освещения (KHR_materials_unlit, часто у сгенерированных) — делаем обычный материал, чтобы ложились свет и тени
+  if (cfg.lit) root.traverse((o) => {
+    if (o.isMesh && o.material.isMeshBasicMaterial) o.material = new THREE.MeshStandardMaterial({ map: o.material.map, color: o.material.color, roughness: 0.55, metalness: 0.15, name: o.material.name });
+  });
   // «честное» преломление (transmission) требует лишнего прохода рендера на каждый кадр — заменяем тонировкой
   root.traverse((o) => {
     if (!o.isMesh) return;
@@ -505,7 +523,7 @@ export function makeVehicleFromModel(def, cfg, gltf) {
     if (corners.has(key)) lampAt(corners.get(key), key.slice(1), key[0] === 'f');
     else if (tailCorners.has(key)) lampAt(tailCorners.get(key), key.slice(1), key[0] === 'f', 0.45);
   }
-  if (!blink.left.length || !blink.right.length) {
+  if (!cfg.noBlinkers && (!blink.left.length || !blink.right.length)) {
   const lamp = () => new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.16), new THREE.MeshStandardMaterial({ color: 0xff8a00, emissive: 0xff8a00, emissiveIntensity: 5 }));
   const L = (cfg.length ?? size.x) / 2, Wd = box.max.z, H = box.max.y;
   for (const [side, sz] of [['left', -1], ['right', 1]]) for (const x of [L - 0.1, -L + 0.1]) {

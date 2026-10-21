@@ -28,6 +28,9 @@
   ],
   "tram": [
    "tram_ktm5"
+  ],
+  "moto": [
+   "moto_scifi"
   ]
  },
  "vw_passat": {
@@ -77,5 +80,14 @@
   "forward": "-z",
   "hide": "^Object_2$",
   "license": "CC-BY-4.0 — _Mdtv_, https://sketchfab.com/3d-models/5-71-605-3df07535c29044cfa83c698d6687d6f4"
+ },
+ "moto_scifi": {
+  "file": "moto/sci_fi_bike.glb",
+  "length": 2.1,
+  "forward": "-x",
+  "lit": true,
+  "license": "CC-BY-4.0 — Devaster, https://sketchfab.com/3d-models/sci-fi-bike-3bfc4962bc23422d9c574b457e5f7ce9 (сжато gltf-transform: webp, meshopt)",
+  "wheels": "^$",
+  "noBlinkers": true
  }
 }
