@@ -176,7 +176,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   });
   const sun = new THREE.DirectionalLight(0xfff4e6, clean ? 2.4 : 2.6);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.mapSize.set(opts.shadow ?? 4096, opts.shadow ?? 4096);   // 2048 — экономный режим (render.mjs)
   const S = 46;
   Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 400 });
   sun.shadow.bias = -0.00025; sun.shadow.normalBias = 0.03; sun.shadow.radius = 3;

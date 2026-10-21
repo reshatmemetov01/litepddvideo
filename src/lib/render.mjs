@@ -3,6 +3,7 @@ import { chromium } from 'playwright-core';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateScenario } from './validate.mjs';
@@ -72,33 +73,59 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
   // только мешает (замер: 4,1 с/кадр одна против 9,3 с/кадр на каждую из двух). В черновике — 2 вкладки.
   const auto = look.ss > 1 || look.post.dof ? 1 : 2;
   const n = Math.max(1, workers ?? (+process.env.RENDER_WORKERS || auto));
-  const browser = await chromium.launch({
+  // экономия памяти на серверах до 6 ГБ: карта теней 2048 вместо 4096 и сглаживание 1,25 вместо 1,5
+  // (пик памяти браузера ~1,8 ГБ → ~1,2 ГБ); RENDER_LOWMEM=0 — выключить
+  const lowMem = process.env.RENDER_LOWMEM ? process.env.RENDER_LOWMEM === '1' : os.totalmem() < 6 * 2 ** 30;
+  if (lowMem) { look.ss = Math.min(look.ss, 1.25); look.shadow = 2048; }
+  const launch = () => chromium.launch({
     executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium',
     args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox', '--disable-dev-shm-usage'],
   });
+  let browser = await launch();
   const silent = out.replace(/\.mp4$/, '') + '.silent.mp4';
   // защита от зависания: по истечении времени закрываем браузер, рендер падает с ошибкой
-  const watchdog = setTimeout(() => browser.close().catch(() => {}), timeoutMs);
+  let timedOut = false;
+  const watchdog = setTimeout(() => { timedOut = true; browser.close().catch(() => {}); }, timeoutMs);
   let ffRef = null;
+  const openPage = async () => {
+    if (!browser.isConnected()) browser = await launch();
+    const page = await browser.newPage({ viewport: { width: W, height: H } });
+    page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+    page.on('crash', () => { page.crashed = true; console.error('[render] вкладка упала (чаще всего — не хватило памяти)'); });
+    await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}&opts=${encodeURIComponent(JSON.stringify(look))}`, { waitUntil: 'commit', timeout: 120000 });
+    // сцена грузит модели и текстуры сама; на слабом сервере это может занять несколько минут
+    await page.waitForFunction('window.ready === true || window.loadError', null, { timeout: 15 * 60000 });
+    const loadError = await page.evaluate('window.loadError');
+    if (loadError) throw new Error('Сцена не загрузилась: ' + loadError);
+    return page;
+  };
+  // кадр с повтором: если вкладка или браузер упали, открываем сцену заново и снимаем этот же кадр
+  let restarts = 0;
+  const shoot = async (slot, pages, t, opts) => {
+    for (;;) {
+      try {
+        await pages[slot].evaluate((t) => window.renderAt(t), t);
+        return await pages[slot].screenshot(opts);
+      } catch (e) {
+        // упавшая вкладка не отвечает: снимок ждёт до таймаута — это тоже повод перезапустить
+        const dead = pages[slot].crashed || !browser.isConnected() || /closed|crash|Target|disconnected/i.test(e.message);
+        if (timedOut || !dead || restarts >= 3) throw e;
+        restarts++;
+        console.error(`[render] браузер упал на t=${t.toFixed(2)} с, перезапуск ${restarts}/3:`, e.message.split('\n')[0]);
+        await pages[slot].close().catch(() => {});
+        pages[slot] = await openPage();
+      }
+    }
+  };
   try {
     const pages = [];
-    for (let i = 0; i < (onlyFrames ? 1 : n); i++) {
-      const page = await browser.newPage({ viewport: { width: W, height: H } });
-      page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-      await page.goto(`http://127.0.0.1:${port}/src/web/index.html?scenario=${encodeURIComponent(scenarioRel)}&w=${W}&h=${H}&opts=${encodeURIComponent(JSON.stringify(look))}`, { waitUntil: 'commit', timeout: 120000 });
-      // сцена грузит модели и текстуры сама; на слабом сервере это может занять несколько минут
-      await page.waitForFunction('window.ready === true || window.loadError', null, { timeout: 15 * 60000 });
-      const loadError = await page.evaluate('window.loadError');
-      if (loadError) throw new Error('Сцена не загрузилась: ' + loadError);
-      pages.push(page);
-    }
+    for (let i = 0; i < (onlyFrames ? 1 : n); i++) pages.push(await openPage());
 
     if (onlyFrames) {
       const base = out.replace(/\.mp4$/, '');
       for (const t of onlyFrames) {
         const t0 = Date.now();
-        await pages[0].evaluate((t) => window.renderAt(t), t);
-        await pages[0].screenshot({ path: `${base}_t${String(t).replace('.', '_')}.png` });
+        await shoot(0, pages, t, { path: `${base}_t${String(t).replace('.', '_')}.png` });
         if (process.env.RENDER_TIMING && t === onlyFrames[0]) console.log('город:', JSON.stringify(await pages[0].evaluate('window.__cityStats')));
         if (process.env.RENDER_TIMING) console.log(`кадр t=${t}: ${((Date.now() - t0) / 1000).toFixed(1)} c (с учётом снимка)`, JSON.stringify(await pages[0].evaluate('window.__renderInfo')));
       }
@@ -126,13 +153,12 @@ export async function renderScenario({ scenario, durations, audio, music, qualit
         onProgress?.({ frame: written, total, seconds: (Date.now() - t0) / 1000 });
       }
     };
-    await Promise.all(pages.map(async (page) => {
+    await Promise.all(pages.map(async (_, slot) => {
       while (true) {
         if (next >= total) return;
         if (next - written > LOOKAHEAD) { await new Promise((r) => setTimeout(r, 20)); continue; }
         const f = next++;
-        await page.evaluate((t) => window.renderAt(t), (first + f) / fps);
-        ready.set(f, await page.screenshot({ type: 'jpeg', quality: 93 }));
+        ready.set(f, await shoot(slot, pages, (first + f) / fps, { type: 'jpeg', quality: 93 }));
         await flush();
       }
     }));
