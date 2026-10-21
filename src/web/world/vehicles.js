@@ -2,6 +2,7 @@
 // стоп-сигналами, поворотниками и приседанием кузова. Ось «вперёд» модели — +x, левый борт — −z.
 import * as THREE from 'three';
 import { simplifySubtree } from './assets.js';
+import { addBranding } from './branding.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const shadowed = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
@@ -511,6 +512,7 @@ export function makeVehicleFromModel(def, cfg, gltf) {
     const b = lamp(); b.position.set(x, H * 0.42, sz * (Wd * 0.8)); b.visible = false; body.add(b); blink[side].push(b);
   }
   }
+  addBranding(root, body, def, cfg, new THREE.Vector3(cfg.length ?? size.x, box.max.y - box.min.y, box.max.z - box.min.z));
   root.userData = { body, wheels, radius, tail, blink, length: cfg.length ?? size.x };
   return root;
 }

@@ -40,7 +40,8 @@
    "^INTERIOR$": 0.1
   },
   "license": "CC-BY-NC-SA-4.0 — НЕКОММЕРЧЕСКАЯ. Ddiaz Design, https://sketchfab.com/3d-models/2022-volkswagen-passat-limited-edition-cfe37bc9a7cf4ac2bf8f989db5353567",
-  "blinkers": "^Ref_Oragne$"
+  "blinkers": "^Ref_Oragne$",
+  "plateRear": 0.74
  },
  "bmw_m5": {
   "file": "cars/bmw_m5_2018.glb",
@@ -49,7 +50,8 @@
   "paint": "^bM_CarPaint_Max1$",
   "lights": "Red_Low1$",
   "license": "CC-BY-NC-SA-4.0 — НЕКОММЕРЧЕСКАЯ. Ddiaz Design, https://sketchfab.com/3d-models/2018-bmw-m5-785e6ad50fae4df5a4abb6a39fcc6fcc",
-  "blinkers": "Orange_Low1$"
+  "blinkers": "Orange_Low1$",
+  "plateRear": 0.8
  },
  "zil_131": {
   "file": "trucks/zil_131.glb",
