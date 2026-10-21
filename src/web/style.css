@@ -45,3 +45,25 @@ html, body { margin: 0; background: #000; }
 .card .hl { position: absolute; border: .45rem solid #2fdc55; background: rgba(47, 220, 85, .28); border-radius: 1.2rem; box-sizing: border-box; }
 .card .note { margin: 1.2rem auto 0; width: fit-content; background: rgba(18, 24, 20, .94); border: .25rem solid #8be04e; color: #fff; font-weight: 800; font-size: 2.8rem; white-space: nowrap; padding: .3em 1em; border-radius: 99em; box-shadow: 0 .4rem 1.5rem rgba(0,0,0,.3); }
 .card .badge { margin: 1rem auto 0; width: fit-content; background: #2fdc55; color: #06240f; font-weight: 800; font-size: 3rem; padding: .35em .9em; border-radius: 99em; box-shadow: 0 .4rem 1.5rem rgba(0,0,0,.3); }
+
+/* буква над машиной: цветной кружок с «ножкой» */
+.marker { position: absolute; left: 0; top: 0; width: 1.6em; height: 1.6em; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 2.6rem; color: #0f1a0a; background: #8be04e; border: .1em solid #fff; box-shadow: 0 .15em .6em rgba(0,0,0,.35); }
+.marker::after { content: ''; position: absolute; left: 50%; top: 100%; width: .08em; height: .6em; margin-left: -.04em; background: #fff; }
+.marker.red { background: #ff5a4f; color: #fff; } .marker.yellow { background: #ffd400; }
+/* подпись у стрелки на асфальте */
+.glabel { position: absolute; left: 0; top: 0; white-space: nowrap; font-weight: 800; font-size: 4rem; color: #fff;
+  -webkit-text-stroke: .07em rgba(10,20,10,.9); paint-order: stroke fill; text-shadow: 0 .06em .2em rgba(0,0,0,.6); }
+/* карточка-итог */
+.summary { position: absolute; top: 10.5rem; left: 50%; width: 88%; background: #fff; color: #10172e; border-radius: 1.4rem; padding: 1.2rem 1.4rem;
+  box-shadow: 0 .6rem 2.4rem rgba(0,0,0,.35); }
+.sum-h { font-weight: 700; font-size: 1.8rem; color: #6b7390; margin-bottom: .4rem; }
+.sum-q { font-weight: 800; font-size: 2.4rem; line-height: 1.2; margin-bottom: .8rem; }
+.sum-a { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: #dff7c8; border: .25rem solid #6cc93a; border-radius: .9rem;
+  padding: .6rem 1rem; font-weight: 800; font-size: 2.4rem; }
+.sum-a b { flex: none; width: 1.5em; height: 1.5em; border-radius: 50%; background: #3dbb2f; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .9em; }
+/* плашка Telegram-канала */
+.promo { position: absolute; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: .5em; white-space: nowrap;
+  background: rgba(18, 24, 20, .93); border: .12em solid #2aabee; border-radius: 99em; padding: .3em .9em .3em .35em; font-weight: 800; font-size: 3rem; }
+.promo svg { width: 1.5em; height: 1.5em; }
+.promo.top { top: 10.5rem; } .promo.bottom { bottom: 12rem; }

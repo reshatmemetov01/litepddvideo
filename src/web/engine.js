@@ -11,6 +11,7 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { loadSky, allLoaded, setMaxAnisotropy, loadGltf } from './world/assets.js';
 import { buildCity, groundY } from './world/city.js';
+import { buildAnnotations } from './world/annotations.js';
 import { makeSign, makeTrafficLight, preloadSigns, mainDirectionCanvas } from './world/props.js';
 import { makeVehicle, makeVehicleFromModel, prepareVehicleModel, animateVehicle } from './world/vehicles.js';
 import { makePedestrian, makePedestrianFromModel, animatePedestrian, animateModelPedestrian } from './world/people.js';
@@ -153,7 +154,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  const clean = (scenario.scene.style ?? 'clean') === 'clean';
+  const clean = (scenario.scene.style ?? 'clean') !== 'real';   // clean и city — стилизованные
   // clean: нейтральная тонокоррекция сохраняет яркие цвета (газон, плитка); real — киношная ACES
   renderer.toneMapping = clean ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = scenario.scene.exposure ?? 1.0;
@@ -219,6 +220,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
     scene.add(m);
     return { h, m };
   });
+  const notes = buildAnnotations(scene, scenario, actors);   // зоны, стрелки, подсветка зебры
   const ribbons = (scenario.routes ?? []).map((r) => {
     const g = new THREE.Group();
     for (let i = 0; i < r.points.length - 1; i++) {
@@ -387,6 +389,20 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       ${scenario.card.answers.map((a, i) => `<div class="ans" data-i="${i}"><b>${i + 1}</b><span>${a}</span></div>`).join('')}`;
     card = { c: scenario.card, d, answers: [...d.querySelectorAll('.ans')] };
   }
+  // буквы над машинами (А, Б, В) в цветных кружках
+  const markers = (scenario.markers ?? []).map((m) => { const d = el('marker ' + (m.style ?? '')); d.textContent = m.text; return { m, d }; });
+  // подписи у стрелок на асфальте («< 5 м»)
+  const groundLabels = notes.labels.map((l) => { const d = el('glabel'); d.innerHTML = markup(l.text); return { l, d }; });
+  // карточка-итог: одна строка с правильным ответом
+  const summary = scenario.card?.summary ? (() => {
+    const c = scenario.card.summary, d = el('summary');
+    d.innerHTML = (c.title ? `<div class="sum-h">${markup(c.title)}</div>` : '') + (c.question ? `<div class="sum-q">${markup(c.question)}</div>` : '') +
+      `<div class="sum-a"><span>${markup(c.answer)}</span><b>✓</b></div>`;
+    return { c, d };
+  })() : null;
+  // плашка с Telegram-каналом
+  const TG = '<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#2aabee"/><path d="M22 49 76 28 67 73 50 61 43 68 42 57 65 37 37 54Z" fill="#fff"/><path d="M42 57 43 68 50 61Z" fill="#c8daea"/></svg>';
+  const promos = (scenario.promo ?? []).map((p) => { const d = el('promo ' + (p.pos ?? 'top')); d.innerHTML = `${TG}<span>${markup(p.text)}</span>`; return { p, d }; });
   const cta = scenario.cta ? (() => { const d = el('cta'); d.innerHTML = `<div class="cta-t">${markup(scenario.cta.text)}</div><div class="cta-s">${scenario.cta.sub ?? ''}</div>`; return { c: scenario.cta, d }; })() : null;
 
   const vis = (d, on) => { d.style.opacity = on; d.style.display = on > 0.001 ? '' : 'none'; };
@@ -422,6 +438,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       m.scale.set(sc, sc, sc);
       m.material.opacity = on * 0.9;
     }
+    notes.update(t, win);
     for (const { tr, line, arrow, mat, segs } of trails) {
       const on = win(t, tr.t0, tr.t1);
       const prog = clamp((t - tr.t0) / (tr.draw ?? 1.6), 0, 1);
@@ -457,7 +474,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
     // оверлей
     for (const { h, d } of hooks) vis(d, win(t, h.t0, h.t1));
     // пока на экране карточка вопроса, субтитры опускаются ниже неё
-    const cardOn = card ? Math.max(...card.c.windows.map(([a, b]) => win(t, a, b, 0.35))) : 0;
+    const cardOn = card ? Math.max(0, ...card.c.windows.map(([a, b]) => win(t, a, b, 0.35))) : 0;
     for (const { v, d } of captions) { vis(d, win(t, v.t0, v.t1, 0.06)); d.style.transform = `translateY(${cardOn * 13}rem)`; }
     for (const { l, d } of labels) {
       const on = win(t, l.t0, l.t1);
@@ -476,7 +493,7 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
       }
     }
     if (card) {
-      const on = Math.max(...card.c.windows.map(([a, b]) => win(t, a, b, 0.35)));
+      const on = Math.max(0, ...card.c.windows.map(([a, b]) => win(t, a, b, 0.35)));
       vis(card.d, on);
       card.d.style.transform = `translateY(${(1 - on) * -30}px)`;
       const rev = t >= card.c.reveal;
@@ -488,6 +505,26 @@ export async function createEngine(canvas, overlay, scenario, size, opts = {}) {
         n.classList.toggle('dim', rev && k !== card.c.correct);
       });
     }
+    for (const { m, d } of markers) {
+      const on = win(t, m.t0, m.t1);
+      vis(d, on);
+      if (on > 0) {
+        const o = actors[m.target].mesh;
+        const s = project(new THREE.Vector3(o.position.x, o.position.y + (m.height ?? (o.userData.length > 6 ? 4.4 : 2.4)), o.position.z));
+        d.style.transform = `translate(${s.x}px, ${clamp(s.y, height * 0.2, height * 0.85)}px) translate(-50%, -100%) scale(${0.6 + 0.4 * on})`;
+      }
+    }
+    for (const { l, d } of groundLabels) {
+      const on = win(t, l.t0, l.t1);
+      vis(d, on);
+      if (on > 0) { const s = project(l.pos); d.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -50%)`; }
+    }
+    if (summary) {
+      const on = win(t, summary.c.t0, summary.c.t1, 0.35);
+      vis(summary.d, on);
+      summary.d.style.transform = `translateX(-50%) translateY(${(1 - on) * -30}px)`;
+    }
+    for (const { p, d } of promos) vis(d, win(t, p.t0, p.t1, 0.3));
     if (cta) vis(cta.d, win(t, cta.c.t0, cta.c.t1, 0.4));
   }
 

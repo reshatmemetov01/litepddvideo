@@ -30,6 +30,7 @@ export function validateScenario(s) {
   };
 
   if (!s.scene || !ROADS.some((r) => JSON.stringify(r) === JSON.stringify(s.scene.roads))) err('scene.roads: допустимо ["x","z"], ["z"] или ["x"]');
+  if (s.scene?.style !== undefined && !['clean', 'city', 'real'].includes(s.scene.style)) err('scene.style: "clean" (красная плитка), "city" (серая плитка, жёлтые дома) или "real" (фотореализм)');
   (s.scene?.signs ?? []).forEach((g, i) => {
     if (!SIGN_TYPES.includes(g.type)) err(`scene.signs[${i + 1}]: тип «${g.type}» неизвестен (${SIGN_TYPES.join(', ')})`);
     if (!Array.isArray(g.pos) || g.pos.length !== 2) err(`scene.signs[${i + 1}]: pos должен быть [x, z]`);
@@ -71,6 +72,20 @@ export function validateScenario(s) {
     needId(r.target, w);
     for (const k of ['t0', 't1', 'pathT0', 'pathT1']) checkTime(r[k], `${w}.${k}`);
   });
+  (s.markers ?? []).forEach((m, i) => { const w = `markers[${i + 1}]`; if (typeof m.target !== 'string') err(`${w}: нужен target`); needId(m.target, w); if (!m.text) err(`${w}: нужна буква text`); checkTime(m.t0, `${w}.t0`); checkTime(m.t1, `${w}.t1`); });
+  (s.zones ?? []).forEach((z, i) => {
+    const w = `zones[${i + 1}]`;
+    if (z.target !== undefined) needId(z.target, w); else if (!Array.isArray(z.pos) || z.pos.length !== 2) err(`${w}: нужен pos [x, z] или target`);
+    checkTime(z.t0, `${w}.t0`); checkTime(z.t1, `${w}.t1`);
+  });
+  (s.arrows ?? []).forEach((a, i) => {
+    const w = `arrows[${i + 1}]`;
+    if (!Array.isArray(a.from) || !Array.isArray(a.to)) err(`${w}: нужны from [x, z] и to [x, z]`);
+    checkTime(a.t0, `${w}.t0`); checkTime(a.t1, `${w}.t1`);
+  });
+  (s.crosswalkHighlights ?? []).forEach((c, i) => { checkTime(c.t0, `crosswalkHighlights[${i + 1}].t0`); checkTime(c.t1, `crosswalkHighlights[${i + 1}].t1`); });
+  (s.promo ?? []).forEach((p, i) => { if (!p.text) err(`promo[${i + 1}]: нужен text`); checkTime(p.t0, `promo[${i + 1}].t0`); checkTime(p.t1, `promo[${i + 1}].t1`); });
+  if (s.card?.summary) { const c = s.card.summary; if (!c.answer) err('card.summary.answer: строка ответа'); checkTime(c.t0, 'card.summary.t0'); checkTime(c.t1, 'card.summary.t1'); }
   (s.decals ?? []).forEach((d, i) => {
     const w = `decals[${i + 1}]`;
     checkTime(d.t0, `${w}.t0`); checkTime(d.t1, `${w}.t1`);

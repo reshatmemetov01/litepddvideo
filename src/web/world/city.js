@@ -70,6 +70,30 @@ function makeCleanMaterials() {
     galvanized: new THREE.MeshStandardMaterial({ color: 0xa9adb2, roughness: 0.35, metalness: 0.85 }),
   };
 }
+// стиль "city": серая плитка, жёлтые дома, светлый асфальт (как в роликах про остановку и стоянку)
+function makeCityMaterials() {
+  const M = makeCleanMaterials();
+  const tiles = canvasTex(512, (g, n) => {   // квадратная плитка 40×40 см, тайл 2×2 м
+    g.fillStyle = '#9a9a98'; g.fillRect(0, 0, n, n);
+    const k = n / 5;
+    for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) { const v = 168 + rnd() * 22; g.fillStyle = `rgb(${v},${v},${v - 2})`; g.fillRect(c * k + 2, r * k + 2, k - 4, k - 4); }
+  }, 2);
+  const asphalt = canvasTex(256, (g, n) => {
+    g.fillStyle = '#76797e'; g.fillRect(0, 0, n, n);
+    for (let i = 0; i < 2600; i++) { const v = 105 + rnd() * 30; g.fillStyle = `rgba(${v},${v},${v + 3},0.35)`; g.fillRect(rnd() * n, rnd() * n, 2, 2); }
+  }, 4);
+  const matte = (c, r = 0.9) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
+  return {
+    ...M,
+    paving: new THREE.MeshStandardMaterial({ map: tiles, roughness: 0.9 }),
+    asphalt: new THREE.MeshStandardMaterial({ map: asphalt, roughness: 0.92 }),
+    curb: matte(0xbdbdbb, 0.8),
+    plaster: [0xe9c46a, 0xf0cf7e, 0xe3b85c, 0xedc977].map((c) => matte(c)),
+    brick: matte(0xe9c46a),
+    concrete: matte(0xf4f1ea),
+    treePalette: [0x5f9e3a, 0x6aa842, 0x579434, 0x72b04a],
+  };
+}
 function makeMaterials() {
   return {
     asphalt: pbr('asphalt_02', { size: 7, color: 0xb8b8b8 }),
@@ -132,6 +156,13 @@ function sidewalk(scene, M, axis, side, a, b) {
   }
 }
 
+/** Белые полосы зебры: [x, z, ширина по x, длина по z] — общие для разметки и подсветки. */
+export function crosswalkStripes(road, at) {
+  const out = [];
+  for (let i = -3.5; i <= 3.5; i += 1) out.push(road === 'z' ? [i, at, 0.5, 4] : [at, i, 4, 0.5]);
+  return out;
+}
+
 function markings(scene, M, roads, crosswalks) {
   const zebraDefault = M.clean ? 'white' : 'yellow';
   const inst = new Instances();
@@ -163,7 +194,7 @@ function markings(scene, M, roads, crosswalks) {
   // (как во многих городах РФ, по умолчанию в стиле real), "white" — только белые (по умолчанию в стиле clean)
   for (const c of crosswalks) {
     const { road, at, style = zebraDefault } = typeof c === 'number' ? { road: 'z', at: c } : c;
-    for (let i = -3.5; i <= 3.5; i += 1) road === 'z' ? put(i, at, 0.5, 4) : put(at, i, 4, 0.5);
+    for (const [x, z, sx, sz] of crosswalkStripes(road, at)) put(x, z, sx, sz);
     if (style === 'yellow') for (let i = -3; i <= 3; i += 1) road === 'z' ? put(i, at, 0.4, 4, true) : put(at, i, 4, 0.4, true);
   }
   inst.flush(scene);
@@ -310,9 +341,9 @@ function makeTreeVariants() {
 }
 // мультяшные деревья для стиля clean: ствол и крона из нескольких «шаров» (низкополигональные, гранёные)
 const CROWN = [0x9fd062, 0x8cc451, 0xa9d873, 0x94c95a];
-function makeCartoonTreeVariants() {
+function makeCartoonTreeVariants(palette = CROWN) {
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8e6d4f, roughness: 0.9 });
-  return CROWN.map((color, i) => {
+  return palette.map((color, i) => {
     const g = new THREE.Group();
     const trunkH = 2.4 + i * 0.2;
     g.add(shadowed(new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, trunkH + 1, 8).translate(0, (trunkH + 1) / 2, 0), trunkMat)));
@@ -384,14 +415,15 @@ async function scatterProps(scene, spots, M) {
 /** Строит всё окружение. variants — исходные деревья: их материалы общие с копиями (ветер). */
 export async function buildCity(scene, scenario) {
   reseed(7);
-  const clean = (scenario.scene.style ?? 'clean') === 'clean';
-  const M = clean ? makeCleanMaterials() : makeMaterials();
+  const style = scenario.scene.style ?? 'clean';
+  const clean = style !== 'real';
+  const M = style === 'city' ? makeCityMaterials() : clean ? makeCleanMaterials() : makeMaterials();
   const roads = scenario.scene.roads ?? ['x', 'z'];
   const crosswalks = scenario.scene.crosswalks ?? [];
   buildRoads(scene, M, roads, crosswalks, scenario.scene.tram);
 
   const inst = new Instances();
-  const variants = clean ? makeCartoonTreeVariants() : makeTreeVariants();
+  const variants = clean ? makeCartoonTreeVariants(M.treePalette) : makeTreeVariants();
   const trees = [];
   const lampProto = makeLamp(M);
   const spots = { shrubs: [], hydrants: [], benches: [] };
