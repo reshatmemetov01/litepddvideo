@@ -58,7 +58,8 @@
   "length": 7.04,
   "forward": "+z",
   "wheels": "^(R|L)\\d\\d$",
-  "license": "CC-BY-4.0 — tiunov.se, https://sketchfab.com/3d-models/zil-131-b20ff18a43cb43e2b5c6bdd439b108e0"
+  "license": "CC-BY-4.0 — tiunov.se, https://sketchfab.com/3d-models/zil-131-b20ff18a43cb43e2b5c6bdd439b108e0",
+  "plateFront": 0.72
  },
  "maz_203": {
   "file": "buses/maz_203.glb",

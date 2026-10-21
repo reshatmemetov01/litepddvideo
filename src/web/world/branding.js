@@ -67,7 +67,21 @@ const tex = (canvas) => { const t = new THREE.CanvasTexture(canvas); t.colorSpac
  * Номера и наклейка для машины. root — машина (вперёд +x, левый борт −z, земля y = 0), body — кузов.
  * Вызывать сразу после сборки, пока root в начале координат.
  */
+// случайный, но постоянный для объекта номер: буквы, которые есть и в кириллице, и в латинице (как на настоящих номерах)
+const PLATE_LETTERS = 'АВЕКМНОРСТУХ';
+const REGIONS = ['77', '97', '99', '177', '197', '777', '50', '150', '190', '750', '78', '98', '178', '23', '61', '16', '02', '52', '66', '74'];
+function randomPlate(seedText) {
+  let h = 2166136261;
+  for (const ch of seedText) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const next = (n) => { h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0; h = (h ^ (h >>> 13)) >>> 0; return h % n; };
+  const L = () => PLATE_LETTERS[next(PLATE_LETTERS.length)];
+  const num = String(1 + next(999)).padStart(3, '0');
+  return `${L()}${num}${L()}${L()}${REGIONS[next(REGIONS.length)]}`;
+}
+
 export function addBranding(root, body, def, cfg, size) {
+  // номер по умолчанию — случайный российский; "plate": false — оставить номер модели
+  if (def.plate === undefined && def.type !== 'tram') def = { ...def, plate: randomPlate(String(def.id ?? '')) };
   if (!def.plate && !def.sticker) return;
   root.updateMatrixWorld(true);
   const parts = [];
