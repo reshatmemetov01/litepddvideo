@@ -84,7 +84,8 @@
           ]
         }
       }
-    ]
+    ],
+    "style": "city"
   },
   "voiceover": [
     {
@@ -167,7 +168,8 @@
         }
       ],
       "plate": "Е777КХ77",
-      "sticker": "@litepdd"
+      "sticker": "@litepdd",
+      "model": "bmw_m5"
     },
     {
       "id": "truck",
